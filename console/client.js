@@ -948,6 +948,10 @@ function connectButton(event, obj) {
  */
 function startPtt(micActive) {
     if (!pttActive && selectedRadio) {
+        if (radios[selectedRadioIdx].type === "stream") {   // RX-only
+            console.debug("Start-PTT ignored: RX-only stream");
+            return;
+        }
         // Only send the TX command and unmute the mic if we have a valid socket
         if (radios[selectedRadioIdx].wsConn) {
             console.log("Starting PTT on " + selectedRadio);
@@ -1487,7 +1491,7 @@ async function readConfig() {
 
     // Get radios
     radios = config.Radios;
-    radios = radios.map(v => ({
+    radios = radios.map(tagRadioType).map(v => ({
         ...v,
         status: {
             State: 'Disconnected'
@@ -1618,8 +1622,12 @@ function newRadioAdd() {
     // Default name (used for logging until we get the proper name)
     newRadio.name = `Radio ${newRadioIdx}`;
 
+    // Tag the radio type
+    newRadio = tagRadioType(newRadio);
     // Append to config
     radios.push(newRadio);
+    
+
 
     // Populate new radio
     console.log("Adding radio " + newRadio.name);
@@ -1631,6 +1639,239 @@ function newRadioAdd() {
     addRadioToEditTable(newRadio);
     // Clear form
     newRadioClear();
+}
+
+function tagRadioType(r) {
+    // Already tagged? – leave it alone
+    if (r.type) return r;
+
+    // Starts with http:// or https://  ⇒  stream
+    if (typeof r.address === 'string' && /^https?:\/\//i.test(r.address)) {
+        r.type      = 'stream';
+        r.streamUrl = r.address;        // make explicit for later code
+    } else {
+        r.type = 'radio';               // normal WebRTC radio
+    }
+    return r;
+}
+
+/******************************************************************
+ * Stream-RX voice-activity monitor
+ ******************************************************************/
+const STREAM_THRESH   = 0.002;   // tweak for your streams
+const STREAM_HOLD_ON  =  10;     // frames above thresh before "RX" (≈170 ms)
+const STREAM_HOLD_OFF =  15;     // frames below thresh before idle  (≈250 ms)
+
+/**
+ * Starts a rAF-loop that toggles radios[idx].status.State between
+ * "Receiving" and "Connected" based on audio energy.
+ */
+function monitorStreamRx(idx) {
+
+    let hotFrames = 0;        // consecutive frames above thresh
+    let quietFrames = 0;      // consecutive frames below thresh
+
+    function tick() {
+        /*  If the radio was deleted or the stream torn down,
+            stop monitoring – *do not* queue another frame. */
+        if (!radios[idx] ||
+            !radios[idx].audioSrc ||
+            !radios[idx].audioSrc.analyzerNode) {
+            cancelAnimationFrame(radios[idx].rafId);   // tidy up
+            radios[idx].rafId = null;
+            return;
+        }
+    
+        const aNode  = radios[idx].audioSrc.analyzerNode;
+
+        aNode.getFloatTimeDomainData(radios[idx].audioSrc.analyzerData);
+
+        // cheap RMS
+        let sum = 0;
+        const buf = radios[idx].audioSrc.analyzerData;
+        for (let i = 0; i < buf.length; i++) sum += buf[i] * buf[i];
+        const rms = Math.sqrt(sum / buf.length);
+
+        const state = radios[idx].status.State;
+
+        if (rms > STREAM_THRESH) {
+            hotFrames++;  quietFrames = 0;
+            if (hotFrames === STREAM_HOLD_ON && state !== "Receiving") {
+                radios[idx].status.State = "Receiving";
+                updateRadioCard(idx);
+                checkAudioMeterCallback();
+            }
+        } else {
+            quietFrames++;  hotFrames = 0;
+            if (quietFrames === STREAM_HOLD_OFF && state === "Receiving") {
+                radios[idx].status.State = "Connected";  // idle but up
+                updateRadioCard(idx);
+                checkAudioMeterCallback();
+            }
+        }
+        radios[idx].rafId = requestAnimationFrame(tick);
+    }
+    radios[idx].rafId = requestAnimationFrame(tick);
+}
+
+/**
+ * Fetch the Icy-Name header from the stream URL
+ * @param {string} url Stream URL
+ * @returns {string|null} Icy-Name or null if not found
+ * 
+ */
+async function fetchIcyName(url) {
+    try {
+        const res = await fetch(url, {
+            method : 'GET',
+            mode   : 'cors',
+            headers: { 'Icy-MetaData':'1' }  // polite hint, many servers ignore it
+        });
+
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const icyName = res.headers.get('icy-name');
+        return icyName ? decodeURIComponent(icyName) : null;
+
+    } catch (err) {
+        console.warn('fetchIcyName()', err);
+        return null;
+    }
+}
+
+/**
+ * Connect to a stream radio
+ * @param {int} idx index of radio in radios[]
+ * @returns {boolean} true if connection starts successfully
+ * */
+
+async function connectStreamRadio(idx) {
+    console.info(`Connecting to stream ${radios[idx].name}`);
+
+    let url = radios[idx].streamUrl.trim();
+    if (location.protocol === 'https:' && url.startsWith('http://')) {
+        url = url.replace('http://', 'https://'); 
+    }
+
+    const icyName = await fetchIcyName(url);
+
+    if (icyName) {
+        // radios[idx].name = icyName;          // overwrite placeholder
+        $(`#radio${idx} .radio-name`).text(icyName);   // live update header
+    }
+
+
+    const el   = new Audio();
+    el.crossOrigin = 'anonymous';
+    el.preload     = 'none';
+    el.autoplay    = false;
+    radios[idx].audioEl = el;
+
+
+    const src      = audio.context.createMediaElementSource(el);
+
+    const filter   = audio.context.createBiquadFilter();
+    filter.type    = 'lowpass';
+    filter.frequency.value = audio.filterCutoff;
+
+
+    const agcNode     = audio.context.createDynamicsCompressor();
+    agcNode.knee.value     = audio.agcKnee;
+    agcNode.ratio.value    = audio.agcRatio;
+    agcNode.attack.value   = audio.agcAttack;
+    agcNode.release.value  = audio.agcRelease;
+    
+    const makeupNode  = audio.context.createGain();
+    makeupNode.gain.value = audio.agcMakeup;   // 1.0 if AGC off
+
+    const gain     = audio.context.createGain();
+    const mute     = audio.context.createGain();
+    const pan      = audio.context.createStereoPanner();
+    const analyser = audio.context.createAnalyser();
+    const pcm      = new Float32Array(analyser.fftSize);
+
+    src.connect(filter);
+    filter.connect(gain);
+    gain.connect(mute);
+    mute.connect(pan);
+    mute.connect(analyser);
+    pan.connect(audio.outputGain);
+
+    radios[idx].audioSrc = {
+        audioNode   : src,
+        filterNode  : filter,
+        agcNode    : agcNode,
+        makeupNode  : makeupNode,
+        gainNode    : gain,
+        muteNode    : mute,
+        panNode     : pan,
+        analyzerNode: analyser,
+        analyzerData: pcm
+    };
+
+    
+
+    $(`#radio${idx} .icon-connect`)
+        .removeClass('disconnected')
+        .addClass('connecting')
+        .parent().prop('title','Connecting to stream');
+
+
+    el.addEventListener('canplay', () => {
+        console.info(`${radios[idx].name} canplay`);
+        el.play().catch(err => console.warn('autoplay blocked?', err));
+    }, { once:true });
+
+    el.addEventListener('playing', () => {
+        console.info(`${radios[idx].name} playing`);
+        radios[idx].status = {
+            State       : 'Connected',
+            Name        : icyName || radios[idx].name,
+            ZoneName    : 'Stream',
+            ChannelName : icyName || 'Icecast'
+        };
+        
+        radioConnected(idx);
+        updateRadioCard(idx);
+        updateRadioAudio();
+        checkAudioMeterCallback();
+        monitorStreamRx(idx);
+    });
+
+    el.addEventListener('error', e => {
+        console.error(`${radios[idx].name} stream error`, e);
+        disconnectStreamRadio(idx);
+    });
+
+
+    el.src = url;
+    el.load();
+}
+
+/**
+ * Disconnect from a stream radio
+ * @param {int} idx index of radio in radios[]
+ * @returns {boolean} true if disconnection starts successfully
+ * */
+function disconnectStreamRadio(idx) {
+    console.info(`Disconnecting stream ${radios[idx].name}`);
+
+    if (radios[idx].audioEl) {
+        radios[idx].audioEl.pause();
+        radios[idx].audioEl.src = "";
+        radios[idx].audioEl.removeAttribute("src");
+        radios[idx].audioEl.load();
+        radios[idx].audioEl = null;
+    }
+    radios[idx].audioSrc = null;
+    radios[idx].status.State = "Disconnected";
+
+    $(`#radio${idx} .icon-connect`)
+        .removeClass("connecting connected")
+        .addClass("disconnected")
+        .parent().prop("title","Disconnected");
+
+    updateRadioCard(idx);
+    checkAudioMeterCallback();
 }
 
 /***********************************************************************************
@@ -2280,12 +2521,15 @@ function audioMeterCallback() {
 
     // Draw stuff
     radios.forEach((radio, idx) => {
-        // Ignore radios with no connected audio
-        if (radios[idx].audioSrc == null) {
-            if ($(`.radio-card#radio${idx} #rx-bar`).width != 0) {
-                $(`.radio-card#radio${idx} #rx-bar`).width(0);
-            }
-            return
+            /*  ---- SAFETY GUARD ----
+                skip any slot that is either
+                – missing (radio === undefined) or
+                – hasn't finished wiring its audio chain yet        */
+            if (!radio || !radio.audioSrc) {
+                if ($(`.radio-card#radio${idx} #rx-bar`).width != 0) {
+                    $(`.radio-card#radio${idx} #rx-bar`).width(0);
+                }
+                return
         }
         // Ignore radio that isn't receiving (checking for the class compensates for the rx delay)
         if (!$(`.radio-card#radio${idx}`).hasClass("receiving")) {
@@ -2859,6 +3103,9 @@ function sendDigit(digit, duration, delay) {
  * @param {int} idx index of radio in radios[]
  */
 function connectRadio(idx) {
+    if (radios[idx].type === "stream") {
+        return connectStreamRadio(idx);
+    }
     // Log
     console.info(`Connecting to radio ${radios[idx].name}`);
     // Update radio connection icon
@@ -2952,6 +3199,9 @@ function waitForRadioStatus(idx, callback) {
  * @param {int} idx radio index in radios[]
  */
 function disconnectRadio(idx) {
+    if (radios[idx].type === "stream") {
+        return disconnectStreamRadio(idx);
+    }
     // Disconnect if we had a connection open
     if (radios[idx].wsConn) {
         if (radios[idx].wsConn.readyState == WebSocket.OPEN) {
