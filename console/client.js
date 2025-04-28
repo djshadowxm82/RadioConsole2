@@ -481,6 +481,9 @@ function setupCallerLog(radios){
         radios.forEach((radio, idx) => {
             $(`#radio${idx} .caller-log-toggle`).show();
         });
+        radios.forEach((radio, idx) => {
+            $(`#radio${idx} .caller-log-wrap`).show();
+        });
     }
 }
 
@@ -736,11 +739,19 @@ function addRadioCard(id, name, color) {
         // Select the radio
         selectRadio(id);
     });
-
+    
     // Bind the minimize button
     $(".minimize-radio-card").click(function (event) {
 
     })
+
+    //check if the radio is a stream
+    if (radios[getRadioIndex(id)].type === "stream") {  
+        newCard.querySelector("#icon-dtmf").style.display = "none";
+        newCard.querySelector(".caller-log-toggle").remove();
+        newCard.querySelector("#tx-bar").parentElement.parentElement.remove();
+  
+    }
 
     $("#main-layout").append(newCard);
 }
@@ -833,6 +844,9 @@ function updateRadioCard(idx) {
                 checkAudioMeterCallback();
             }, radios[idx].rtc.rxLatency); // used to unmute after latency delay but this makes sure we don't miss anything
             break;
+        case "Connecting":
+            radioCard.addClass("connecting");
+            break;
         case "Disconnected":
             radioCard.addClass("disconnected");
             break;
@@ -880,14 +894,18 @@ function updateRadioControls() {
     if (selectedRadio) {
         // Get the radio from the list
         var radio = radios[selectedRadioIdx];
-        // If the radio is disconnected, don't enable the controls
-        if (radio.status.State == "Disconnected") { return }
+        // If the radio is disconnected or a stream, disable the controls
+        if (radio.status.State == "Disconnected") { return; }
         // Enable softkeys
         $("#radio-controls .btn").removeClass("disabled");
-        // Get softkey text based on page index
+        if (radio.status.Softkeys == null) {
+            console.warn("No softkeys available");
+            return;
+        }
         var curSoftkeyPage = radio.status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage));
         console.debug("Got current softkey page");
         console.debug(curSoftkeyPage);
+
         // Update softkeys on page
         curSoftkeyPage.forEach(function(softkey, index) {
             // Get text
@@ -949,7 +967,8 @@ function connectButton(event, obj) {
 function startPtt(micActive) {
     if (!pttActive && selectedRadio) {
         if (radios[selectedRadioIdx].type === "stream") {   // RX-only
-            console.debug("Start-PTT ignored: RX-only stream");
+            console.warn("Start-PTT ignored: RX-only stream");
+            playSound("sound-error");
             return;
         }
         // Only send the TX command and unmute the mic if we have a valid socket
@@ -1004,14 +1023,17 @@ function startPtt(micActive) {
  * Stop radio PTT
  */
 function stopPtt() {
+   
     if (pttActive) {
         console.log("PTT released");
         pttActive = false;
+        if (radios[selectedRadioIdx] == null) { return;}
         // Mute mic
         setTimeout( muteMic, audio.micMuteDelay );
         // Play sound
         //playSound("sound-ptt-end");
         // Send the stop command if connected
+        
         if (radios[selectedRadioIdx].wsConn && selectedRadio) {
             // Wait and then stop TX (handles mic latency)
             setTimeout( function() {
@@ -1060,6 +1082,15 @@ function changeChannel(down) {
  * @param {int} idx softkey index
  */
 function pressSoftkey(idx) {
+    if(radios[selectedRadioIdx] == null) {
+        return;
+    }
+
+    if(radios[selectedRadioIdx].type === "stream") {   // RX-only
+        console.warn("Press softkey ignored: RX-only stream");
+        playSound("sound-error");
+        return;
+    }
     // convert the current softkey index to the softkey in the radio
     var pressedKey = radios[selectedRadioIdx].status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage))[idx-1];
     console.debug("Mapped pressed softkey to softkey:" + pressedKey.Name);
@@ -1071,6 +1102,8 @@ function pressSoftkey(idx) {
  * @param {int} idx softkey index
  */
 function releaseSoftkey(idx) {
+    if(radios[selectedRadioIdx] == null) {return;}
+
     var releasedKey = radios[selectedRadioIdx].status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage))[idx-1];
     console.debug("Mapped pressed softkey to softkey:" + releasedKey.Name);
     releaseButton(releasedKey.Name);
@@ -1083,6 +1116,9 @@ function button_left() {
     if (config.Audio.ButtonSounds) {
         playSound("sound-click");
     }
+    // Check if we have a selected radio
+    if (radios[selectedRadioIdx] == null) { return;}
+
     maxPages = Math.ceil(radios[selectedRadioIdx].status.Softkeys.length / 6) - 1;
     if (softkeyPage == 0)
     {
@@ -1103,6 +1139,9 @@ function button_right() {
     if (config.Audio.ButtonSounds) {
         playSound("sound-click");
     }
+    // Check if we have a selected radio
+    if (radios[selectedRadioIdx] == null) { return;}
+
     maxPages = Math.ceil(radios[selectedRadioIdx].status.Softkeys.length / 6) - 1;
     if (softkeyPage == maxPages)
     {
@@ -1181,6 +1220,7 @@ function muteButton(event, obj) {
     const radioId = $(obj).closest(".radio-card").attr('id');
     // Get index of radio in list
     const idx = getRadioIndex(radioId);
+
     // toggle mute
     toggleMute(idx);
     // stop prop
@@ -1522,6 +1562,9 @@ async function readConfig() {
     // Populate radio cards
     populateRadios();
 
+    // Update the call log format
+    setupCallerLog(radios);
+
     // If autoconnect is specified, autoconnect!
     if (config.Autoconnect) {
         connectAllButton();
@@ -1582,13 +1625,16 @@ async function saveConfig() {
 function newRadioClear() {
     $('#new-radio-address').val('');
     $('#new-radio-port').val('');
+    $('#new-radio-alias').val('');
     $('#new-radio-pan').val(0);
+
 }
 
 function newRadioAdd() {
     // Get values
     const newRadioAddress = $('#new-radio-address').val();
     const newRadioPort = $('#new-radio-port').val();
+    const newRadioAlias = $('#new-radio-alias').val();
     const newRadioColor = $('#new-radio-color').val();
     const newRadioPan = $('#new-radio-pan').val();
 
@@ -1596,6 +1642,7 @@ function newRadioAdd() {
     var newRadio = {
         address: newRadioAddress,
         port: newRadioPort,
+        alias: newRadioAlias,
         color: newRadioColor,
         pan: newRadioPan,
     };
@@ -1713,30 +1760,42 @@ function monitorStreamRx(idx) {
     }
     radios[idx].rafId = requestAnimationFrame(tick);
 }
-
-/**
- * Fetch the Icy-Name header from the stream URL
- * @param {string} url Stream URL
- * @returns {string|null} Icy-Name or null if not found
- * 
- */
 async function fetchIcyName(url) {
+    const ctrl = new AbortController();
     try {
-        const res = await fetch(url, {
-            method : 'GET',
-            mode   : 'cors',
-            headers: { 'Icy-MetaData':'1' }  // polite hint, many servers ignore it
-        });
-
-        if (!res.ok) throw new Error(`HTTP ${res.status}`);
-        const icyName = res.headers.get('icy-name');
-        return icyName ? decodeURIComponent(icyName) : null;
-
+      const res = await fetch(url, {
+        method : 'GET',
+        headers: { 'Icy-MetaData': '1', 'Range':'bytes=0-0' },
+        signal : ctrl.signal
+      });
+  
+      /* grab headers, then drop the body */
+      const icyName = res.headers.get('icy-name') ||
+                      res.headers.get('icy-description');
+  
+    // //check if its broadcastify
+    // if (res.url.includes("broadcastify")) {
+    //     //get description from the stream
+    //     const desc = res.headers.get('icy-description');
+    //     if (desc) {
+    //         //truncate to 20 characters
+    //         if (desc.length > 20) {
+    //             return decodeURIComponent(desc.substring(0, 20));
+    //         }
+    //         return decodeURIComponent(desc);
+    //     }
+    // }
+      return icyName ? decodeURIComponent(icyName) : null;
+  
     } catch (err) {
-        console.warn('fetchIcyName()', err);
-        return null;
+      console.warn('fetchIcyName()', err);
+      return null;
+    } finally {
+      /* frees the TCP slot immediately */
+      ctrl.abort();
     }
-}
+  }
+  
 
 /**
  * Connect to a stream radio
@@ -1752,7 +1811,8 @@ async function connectStreamRadio(idx) {
         url = url.replace('http://', 'https://'); 
     }
 
-    const icyName = await fetchIcyName(url);
+    let icyName = null;
+
 
     if (icyName) {
         // radios[idx].name = icyName;          // overwrite placeholder
@@ -1791,9 +1851,10 @@ async function connectStreamRadio(idx) {
 
     src.connect(filter);
     filter.connect(gain);
+    gain.connect(analyser);
     gain.connect(mute);
     mute.connect(pan);
-    mute.connect(analyser);
+   
     pan.connect(audio.outputGain);
 
     radios[idx].audioSrc = {
@@ -1815,19 +1876,44 @@ async function connectStreamRadio(idx) {
         .addClass('connecting')
         .parent().prop('title','Connecting to stream');
 
+    radios[idx].status = {
+        State       : 'Connecting',
+        Name        : 'Connecting...',
+        ZoneName    : 'Connecting...',
+        ChannelName : '&nbsp;',
+    };
+    updateRadioCard(idx);
 
+    
     el.addEventListener('canplay', () => {
-        console.info(`${radios[idx].name} canplay`);
-        el.play().catch(err => console.warn('autoplay blocked?', err));
+        el.play().catch(() => {
+            /* muted autoplay fallback */
+            el.muted = true;
+            el.play().finally(() => el.muted = false);
+        });
     }, { once:true });
+
 
     el.addEventListener('playing', () => {
         console.info(`${radios[idx].name} playing`);
+        var altname = radios[idx].alias;
+    
+        var radioName = null;
+        var chanName = null;
+        if (altname) {
+            radioName = altname;
+            chanName = altname;
+        }else{
+            radioName = icyName;
+            chanName = icyName;
+        }
+
         radios[idx].status = {
             State       : 'Connected',
-            Name        : icyName || radios[idx].name,
+            Name        : radioName || "Unknown",
             ZoneName    : 'Stream',
-            ChannelName : icyName || 'Icecast'
+            //if altName is set it should take precedence over the name
+            ChannelName : chanName || "Unknown",
         };
         
         radioConnected(idx);
@@ -1838,13 +1924,31 @@ async function connectStreamRadio(idx) {
     });
 
     el.addEventListener('error', e => {
+        
         console.error(`${radios[idx].name} stream error`, e);
+        //set zone and channel text to error
+   
+        radios[idx].status = {
+            State       : 'Disconnected',
+            Name        : 'Error',
+            ZoneName    : 'Connection failed',
+            ChannelName : '&nbsp;',
+        };
+        updateRadioCard(idx);
+
         disconnectStreamRadio(idx);
     });
 
 
     el.src = url;
     el.load();
+
+    fetchIcyName(url).then(name => {
+        if (name) {
+            icyName = name;
+            $(`#radio${idx} .radio-name`).text(name);
+        }
+    });
 }
 
 /**
@@ -2187,12 +2291,13 @@ function handleRtcWsMsg(event, idx)
 function handleRtcWsError(event, idx)
 {
     console.error(`Radio ${idx} WebRTC WS got error!`);
-    console.error(event.data);
+    if(event.data) {
+        console.error(event.data);
+    }
 }
 
 function handleRtcWsClose(event, idx)
 {
-    console.warn(`Radio ${idx} WebRTC websocket closed!`);
     disconnectRadio(idx);
 }
 
@@ -2703,6 +2808,9 @@ function playSound(soundId) {
  */
 function muteRadio(idx, mute) {
     if (mute) {
+        if (radios[idx].audioSrc == null) {
+            return;
+        }
         console.info(`Muting radio ${idx}`);
         // Set audio node
         radios[idx].audioSrc.muteNode.gain.setValueAtTime(0, audio.context.currentTime);
@@ -2712,6 +2820,9 @@ function muteRadio(idx, mute) {
         // Set state
         radios[idx].mute = true;
     } else {
+        if (radios[idx].audioSrc == null) {
+            return;
+        }
         console.info(`Unmuting radio ${idx}`);
         // Set audio node
         radios[idx].audioSrc.muteNode.gain.setValueAtTime(1, audio.context.currentTime);
@@ -3112,6 +3223,13 @@ function connectRadio(idx) {
     $(`#radio${idx} .icon-connect`).removeClass('disconnected');
     $(`#radio${idx} .icon-connect`).addClass('connecting');
     $(`#radio${idx} .icon-connect`).parent().prop('title','Connecting to daemon');
+    radios[idx].status = {
+        State       : 'Connecting',
+        ZoneName    : 'Connecting...',
+        ChannelName : '&nbsp;',
+    };
+    updateRadioCard(idx);
+
     // Create audio context if we haven't already
     if (audio.context == null) {
         startAudioDevices();
@@ -3325,6 +3443,9 @@ function handleSocketClose(event, idx) {
     }
     radios[idx].wsConn = null;
     radios[idx].status.State = 'Disconnected';
+    radios[idx].status.ZoneName = 'Disconnected';
+    radios[idx].status.ChannelName = '&nbsp;';
+
 
     // UI Update
     $(`#radio${idx} .icon-connect`).removeClass('connected');
@@ -3356,11 +3477,40 @@ function handleSocketError(event, idx) {
 function restartRadio(event, obj) {
     // Stop propagation of click
     event.stopPropagation();
-    // Get raido index
+
     const radioId = $(obj).closest(".radio-card").attr('id');
+    const idx = getRadioIndex(radioId);
+
+    // //return if no radio selected
+    // if (selectedRadioIdx === null) {
+    //     return;
+    // }
+
+    if (radios[idx].type === "stream") {
+        console.warn("Restarting stream radio");
+
+        radios[idx].status.State = "Reconnecting";
+        
+        updateRadioCard(idx);
+        
+        //check if stream is running
+        if (radios[idx].status.State != "Disconnected") {
+            console.warn("Stopping stream radio");
+            disconnectStreamRadio(idx);   
+        }
+        //check if stream is running
+        if (radios[idx].status.State == "Disconnected") {
+            console.warn("Starting stream radio");
+            connectStreamRadio(idx);
+        }
+
+        return;
+    }
+    // Get raido index
+  
     console.log(`Restarting radio ${radioId}`);
     // Get index of radio in list
-    const idx = getRadioIndex(radioId);
+    
     // Stop PTT if running
     if (radios[idx].status.State == "Transmitting" || selectedRadioIdx == idx) {
         console.info("Stopping PTT and deslecting radio");
@@ -3369,6 +3519,10 @@ function restartRadio(event, obj) {
     }
     // Send reset command to radio
     console.info("Sending reset command");
+    if(radios[idx].wsConn == null) {
+        console.warn("Radio websocket not connected, can't reset");
+        return;
+    }
     radios[idx].wsConn.send(JSON.stringify(
         {
             "radio": {

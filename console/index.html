@@ -168,11 +168,7 @@
                             <div class="header">
                                 <h2 class="radio-name" title="Placeholder description">Placeholder Name</h2>
                                 <div class="icon-stack">
-                                    <!-- Scan Icon -->
-                                    <div class="scan-icons">
-                                        <ion-icon name="moto-scan" class="scan-icon"></ion-icon>
-                                        <ion-icon name="moto-scan-dot" class="scan-pri-icon"></ion-icon>
-                                    </div>
+                                   
                                     <!-- DTMF Dropdown -->
                                     <a href="#" onclick="showDTMFMenu(event, this)" class="enabled"><ion-icon name="keypad-sharp" id="icon-dtmf"></ion-icon></a>
                                         <div class="dtmf-dropdown closed">
@@ -202,8 +198,8 @@
                             </div>
                             <!-- Content -->
                             <div class="content">
-                                <div id="zone-text">Zone Text</div>
-                                <div id="channel-text">Channel Text</div>
+                                <div id="zone-text">Disconnected</div>
+                                <div id="channel-text">&nbsp;</div>
                                 <!-- Live / flashing line -->
                                 <div class="callerid-live"></div>
                                 <!-- collapsible wrapper -->
@@ -216,11 +212,21 @@
                                     </ul>
                                 </div>
 
+                            
+                                
                                 <!-- collapse chevron to open / close -->
                                 <a  class="caller-log-toggle" title="Show caller log"
                                     onclick="toggleCallerLog(this)">
                                     <ion-icon name="chevron-down-sharp"></ion-icon>
                                 </a>
+
+                                <!-- Status Icons -->
+                                <div class="status-stack">
+                                    <div class="scan-icons">
+                                        <ion-icon name="moto-scan" class="scan-icon"></ion-icon>
+                                        <ion-icon name="moto-scan-dot" class="scan-pri-icon"></ion-icon>
+                                    </div>
+                                </div>
                                 
                                 <!-- RX Audio Bar -->
                                 <div class="audio-bar">
@@ -445,7 +451,7 @@
                     <!-- Daemon Address -->
                     <tr>
                         <td>
-                            <h3>Daemon Address</h3>
+                            <h3>Daemon / Stream Address</h3>
                         </td>
                         <td>
                             <input type="text" id="new-radio-address" class="topcoat-text-input" placeholder="127.0.0.1" value="">
@@ -458,6 +464,15 @@
                         </td>
                         <td>
                             <input type="text" id="new-radio-port" class="topcoat-text-input" placeholder="8801" value="" maxlength="5">
+                        </td>    
+                    </tr>
+                    <!-- Daemon Port -->
+                    <tr>
+                        <td>
+                            <h3>Alias</h3>
+                        </td>
+                        <td>
+                            <input type="text" id="new-radio-alias" class="topcoat-text-input" placeholder="" value="" maxlength="20">
                         </td>    
                     </tr>
                     <!-- Card Color -->

@@ -543,10 +543,17 @@ ion-icon {
     align-items: center;
 }
 
-.radio-card .icon-stack a,
-.radio-card .icon-stack .scan-icons {
+.radio-card .icon-stack a{
     width: 24px;
     display: inline-flex;
+}
+
+.radio-card .status-stack .scan-icons {
+    width: 24px;
+    position: absolute;
+    right: 50px;
+    top: 24px;
+    color: var(--color-txt-light);
 }
 
 .icon-stack ion-icon {
@@ -578,33 +585,33 @@ ion-icon {
     animation: iconAlertRed 0.7s ease infinite;
 }
 
-.icon-stack .scan-icons ion-icon {
+.status-stack .scan-icons ion-icon {
     position: absolute;
     bottom: 5px;
 }
 
 /* No Scan State */
-.icon-stack .scan-icons .scan-icon,
-.icon-stack .scan-icons .scan-pri-icon {
+.status-stack .scan-icons .scan-icon,
+.status-stack .scan-icons .scan-pri-icon {
     opacity: 0;
 }
 
 /* Scanning State */
-.icon-stack .scan-icons.scanning .scan-icon {
+.status-stack .scan-icons.scanning .scan-icon {
     opacity: 1;
 }
 
 /* Priority Scan */
-.icon-stack .scan-icons.priority .scan-pri-icon {
+.status-stack .scan-icons.priority .scan-pri-icon {
     opacity: 1;
 }
 
 /* Priority 2 Scan */
-.icon-stack .scan-icons.priority2 .scan-pri-icon {
+.status-stack .scan-icons.priority2 .scan-pri-icon {
     animation: iconFlash 1s infinite;
     -webkit-animation: iconFlash 1s infinite;
 }
-.icon-stack .scan-icons.priority2 .scan-icon {
+.status-stack .scan-icons.priority2 .scan-icon {
     opacity: 1;
 }
 
