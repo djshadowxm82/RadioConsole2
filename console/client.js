@@ -752,7 +752,7 @@ function addRadioCard(id, name, color) {
         newCard.querySelector("#icon-dtmf").style.display = "none";
         newCard.querySelector(".caller-log-toggle").remove();
         newCard.querySelector("#tx-bar").parentElement.parentElement.remove();
-  
+        newCard.querySelector(".upper-content .icon-stack").remove();
     }
 
     $("#main-layout").append(newCard);
@@ -1837,6 +1837,9 @@ async function connectStreamRadio(idx) {
         $(`#radio${idx} .radio-name`).text(icyName);   // live update header
     }
 
+    if (!audio.context) {
+        startAudioDevices();
+    }
 
     const el   = new Audio();
     el.crossOrigin = 'anonymous';
