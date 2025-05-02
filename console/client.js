@@ -169,6 +169,9 @@ var alertStartTimeout = null;
 // Timeout that ends TX after console alert delay
 var alertStopTimeout = null;
 
+// Stuck button timeout
+var stuckButtonTimeout = null;
+
 testInput = null;
 
 // Radio Card Tempalte
@@ -475,14 +478,13 @@ function setupCallerLog(radios){
         });
         radios.forEach((radio, idx) => {
             $(`#radio${idx} .caller-log-toggle`).hide();
+            $(`#radio${idx} .upper-content .icon-stack`).removeClass('call-chevron');
         });
     } else {
         $("#navbar-call-log").hide();
         radios.forEach((radio, idx) => {
             $(`#radio${idx} .caller-log-toggle`).show();
-        });
-        radios.forEach((radio, idx) => {
-            $(`#radio${idx} .caller-log-wrap`).show();
+            $(`#radio${idx} .upper-content .icon-stack`).addClass('call-chevron');
         });
     }
 }
@@ -825,6 +827,7 @@ function updateRadioCard(idx) {
     }, radios[idx].rtc.txLatency);
     setTimeout(function () {
         radioCard.removeClass("receiving");
+        radioCard.removeClass("encrypted");
     }, radios[idx].rtc.rxLatency);
     radioCard.removeClass("disconnected");
 
@@ -843,6 +846,12 @@ function updateRadioCard(idx) {
                 // Check audio meter state
                 checkAudioMeterCallback();
             }, radios[idx].rtc.rxLatency); // used to unmute after latency delay but this makes sure we don't miss anything
+            break;
+        case "Encrypted":
+            setTimeout(function() {
+                radioCard.addClass("encrypted");
+                checkAudioMeterCallback();
+            }, radios[idx].rtc.rxLatency);
             break;
         case "Connecting":
             radioCard.addClass("connecting");
@@ -879,6 +888,13 @@ function updateRadioCard(idx) {
         default:
             console.debug("Radio not scanning");
             break;
+    }
+
+    // Update secure icon
+    radioCard.find('.secure-icon').removeClass('secure');
+    if (radio.status.Secure)
+    {
+        radioCard.find('.secure-icon').addClass('secure');
     }
 
     // Update pan from config (which in turn is set when you adjust the pan slider)
@@ -1186,7 +1202,7 @@ function pressButton(buttonName) {
         ));
     }
     // Set a timeout to release the button in the event that something breaks
-    setTimeout(() => {
+    stuckButtonTimeout = setTimeout(() => {
         console.debug(`Fallback button release handler for stuck button ${buttonName}`);
         releaseButton(buttonName);
     }, 1500);
@@ -1194,6 +1210,11 @@ function pressButton(buttonName) {
 
 function releaseButton(buttonName) {
     if (!pttActive && selectedRadio && radios[selectedRadioIdx].wsConn) {
+        // Clear timeout if running
+        if (stuckButtonTimeout != null) {
+            clearTimeout(stuckButtonTimeout);
+            stuckButtonTimeout = null;
+        }
         console.log(`Sending button release: ${buttonName}`);
         radios[selectedRadioIdx].wsConn.send(JSON.stringify(
             {
@@ -1571,11 +1592,8 @@ async function readConfig() {
     }
 
     //setup call log
-    if (config.CallLogFormat == "Drawer") {
-        radios.forEach((radio, idx) => {
-            $(`#radio${idx} .caller-log-toggle`).hide();
-        });
-    }
+    setupCallerLog(radios);
+   
 }
 
 async function saveConfig() {
@@ -2281,6 +2299,12 @@ function handleRtcWsMsg(event, idx)
     }
     else if (obj?.sdp) {
         console.debug("Got WebRTC remote description");
+        // Make sure we created the PC
+        if (radios[idx].rtc.peer == null) {
+            console.warn("Got WebRTC SDP before peer was created!");
+            radios[idx].rtc.peer = createPeerConnection(idx);
+        }
+        // Set peer SDP and answer
         radios[idx].rtc.peer.setRemoteDescription(new RTCSessionDescription(obj));
         radios[idx].rtc.peer.createAnswer()
             .then((answer) => radios[idx].rtc.peer.setLocalDescription(answer))
@@ -2637,7 +2661,7 @@ function audioMeterCallback() {
                 return
         }
         // Ignore radio that isn't receiving (checking for the class compensates for the rx delay)
-        if (!$(`.radio-card#radio${idx}`).hasClass("receiving")) {
+        if (!($(`.radio-card#radio${idx}`).hasClass("receiving") || $(`.radio-card#radio${idx}`).hasClass("encrypted"))) {
             if ($(`.radio-card#radio${idx} #rx-bar`).width != 0) {
                 $(`.radio-card#radio${idx} #rx-bar`).width(0);
             }
@@ -2676,7 +2700,7 @@ function checkAudioMeterCallback()
     console.debug("Checking if any radio's audio is active");
     audio_active = false;
     radios.forEach((radio, idx) => {
-        if ($(`.radio-card#radio${idx}`).hasClass("receiving") || $(`.radio-card#radio${idx}`).hasClass("transmitting"))
+        if ($(`.radio-card#radio${idx}`).hasClass("receiving") || $(`.radio-card#radio${idx}`).hasClass("encrypted") || $(`.radio-card#radio${idx}`).hasClass("transmitting"))
         {
             console.debug(`${radio.name} audio active`);
             audio_active = true;
@@ -2845,7 +2869,7 @@ function updateAudio(idx) {
         return;
     }
     // Mute if we're muted or not receiving, after the specified delay in rtc.rxLatency
-    if (radios[idx].mute || (radios[idx].status.State != 'Receiving')) {
+    if (radios[idx].mute || !(radios[idx].status.State === 'Receiving' || radios[idx].status.State === 'Encrypted')) {
         setTimeout(function() {
             console.debug(`Muting audio for radio ${radios[idx].name}`);
             radios[idx].audioSrc.muteNode.gain.setValueAtTime(0, audio.context.currentTime);
