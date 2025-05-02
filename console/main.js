@@ -1,5 +1,5 @@
-const { app, BrowserWindow, ipcMain } = require('electron/main');
-
+const { app, BrowserWindow, ipcMain,session } = require('electron/main');
+const fetch     = (...a)=>import('node-fetch').then(({default:fetch})=>fetch(...a));
 const path = require('path')
 const fs = require('fs');
 
@@ -312,6 +312,85 @@ async function createMidiWindow(midiConfig)
         .then(() => { midiWindow.webContents.send('populateMidiConfig', midiConfig); });
 }
 
+/***********************************************************************************
+ * Broadcastify functions
+ * These are used to login and get the live calls
+ ************************************************************************************/
+
+async function cookieHeader () {
+    const jar = await session.defaultSession.cookies.get({
+        url : 'https://www.broadcastify.com'
+    });
+    return jar.map(c => `${c.name}=${c.value}`).join('; ');
+}
+  
+/* ----------------   LOGIN   ------------------------------- */
+ipcMain.handle('bcfy-login', async (_evt, user, pass) => {
+    const body = new URLSearchParams({
+        username : user,
+        password : pass,
+        action   : 'auth',
+        redirect : '/calls/'              // same as the web site
+    });
+
+
+    const res = await fetch('https://www.broadcastify.com/login/', {
+        method  : 'POST',
+        headers : { 'Content-Type':'application/x-www-form-urlencoded' },
+        redirect: 'manual', 
+        body
+    });
+    if (!res.ok && res.status !== 302) 
+        throw new Error(`login HTTP ${res.status}`);
+    
+    const location = res.headers.get('location');
+
+    if (location && location.includes('failed=1')) {
+        throw new Error('Login failed');
+    }
+
+    const raw = res.headers.raw()['set-cookie'] ?? [];
+    const store = session.defaultSession.cookies;
+
+    for (const line of raw) {
+        const [cookiePart]     = line.split(';');
+        const [name, value]    = cookiePart.split('=');
+
+        await store.set({
+        url      : 'https://www.broadcastify.com',
+        domain   : '.broadcastify.com',
+        path     : '/',
+        secure   : true,
+        httpOnly : false,
+        sameSite : 'no_restriction',
+        name, value
+        });
+    }
+    return true; 
+    });
+
+/* ----------------   LIVE CALLS   ------------------------------- */
+    ipcMain.handle('bcfy-liveCalls', async (_evt, paramsObj) => {
+    const body   = new URLSearchParams(paramsObj);
+    const cookie = await cookieHeader();
+
+    const res = await fetch(
+        'https://www.broadcastify.com/calls/apis/live-calls',
+        {
+        method  : 'POST',
+        headers : {
+            'Content-Type'     :'application/x-www-form-urlencoded; charset=UTF-8',
+            'X-Requested-With' :'XMLHttpRequest',
+            'Origin'           :'https://www.broadcastify.com',
+            'Referer'          :'https://www.broadcastify.com/calls/',
+            'Cookie'           : cookie
+        },
+        body
+        });
+    if (!res.ok) throw new Error(`live-calls HTTP ${res.status}`);
+    return res.json();
+});
+  
 /***********************************************************************************
     App Runtime Entry Point
 ***********************************************************************************/

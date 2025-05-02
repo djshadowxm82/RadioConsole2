@@ -22,3 +22,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Midi Message
   gotMidiMessage: (message) => ipcRenderer.on('gotMidiMessage', message),
 });
+contextBridge.exposeInMainWorld('bcfyAPI', {
+  login     : (u,p)      => ipcRenderer.invoke('bcfy-login',     u, p),
+  liveCalls : paramsObj  => ipcRenderer.invoke('bcfy-liveCalls', paramsObj)
+});

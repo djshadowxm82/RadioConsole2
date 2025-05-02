@@ -38,6 +38,11 @@ const defaultConfig = {
                 num: null,
             },
         }
+    },
+    Broadcastify: {
+        Username: "",
+        Password: "",    
+        aliasCsv: ""    
     }
 }
 
@@ -573,13 +578,48 @@ function closeCallerDrawer(){
 document.getElementById('drawer-close').onclick = closeCallerDrawer;
 
 /**
+ * Get the subscriber alias from radio id
+* @param {string} id the id of the radio
+* @param {string} system the system of the radio
+* @param {boolean} stream true if the radio is a stream
+* @return {string|null} the alias of the radio, or null if not found
+* */
+function getAlpha(id, system, stream = false) {
+
+    if (stream){
+        const idToAlpha = {};
+        const csvFile = config?.Broadcastify?.aliasCsv;
+        if (csvFile){
+            const csvData = csvFile.split('\n');
+            for (const line of csvData) {
+                const [system, radioId, radioAlias] = line.split(',');
+                //check if the system is the same as the one we're looking for
+                if (system === system && radioId === id) {
+                    idToAlpha[radioId] = radioAlias;
+                }
+            }
+        }
+        //check if the id is in the map
+        if (idToAlpha[String(id)] === undefined){
+            return null;
+        }
+
+        return idToAlpha[String(id)] ?? null;
+    }
+    //we're not handling aliases for radios yet.
+    return null;
+    
+}
+
+/**
  * Show live caller-ID while the radio is Receiving.
  * Only when the call *finishes* does the ID get added to the scroll-back.
  *
  * @param {HTMLElement} cardEl – the .radio-card element
  * @param {string|null} idStr  – the current caller-ID (null/"" when idle)
+ * @param {number} timestamp – optional timestamp for the caller ID
  */
-function updateCallerId(cardEl, idStr){
+function updateCallerId(cardEl, idStr,timestamp = null) {
     // this object lives for the lifetime of the element
     if (!cardEl._cidState){
         cardEl._cidState = {
@@ -591,21 +631,43 @@ function updateCallerId(cardEl, idStr){
     const live = cardEl.querySelector('.callerid-live');
     const log  = cardEl.querySelector('.caller-log');
 
-    /* ── radio is Receiving ─────────────────────────────────────────── */
+    /*  radio is Receiving  */
     if (idStr){                     // non-empty ⇒ still RX’ing
-        live.textContent = idStr;   // update live line
-        st.liveId = idStr;          // remember it
-        st.active = true;           // mark "call in progress"
+       
 
-    /* ── radio just went idle – append the *previous* ID ────────────── */
+        const alias = getAlpha(idStr);
+        if (alias) {
+            st.liveId = alias;
+            live.textContent = alias; 
+        }else{
+            live.textContent = idStr;   // update live line
+        }
+        st.liveId = idStr;          // remember it  
+        st.active = true;           // mark "call in progress"
+        
+
+    /*  radio just went idle – append the *previous* ID  */
     } else if (st.active){          // we *were* RXing and just stopped
         st.active = false;
-
-        const timeStr =
+        var timeStr = "";
+        
+        if (timestamp){
+            
+            const date = new Date(timestamp * 1000);
+            timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: false});
+            console.log ("Timestamp: " + timeStr);
+        }else{
+        timeStr =
         (config?.ClockFormat === "UTC")
             ? getTimeUTC("HH:mm:ss")   
             : getTimeLocal("HH:mm:ss");
-
+        }
+      
+        const alias = getAlpha(st.liveId);
+        if (alias) {
+            st.liveId = alias;
+        }
+        
         // build one <li> row and stick it on top of the UL
         const li = document.createElement('li');
         li.innerHTML =
@@ -1706,6 +1768,8 @@ function newRadioAdd() {
     newRadioClear();
 }
 
+var startQueueSeconds = 300;
+
 function tagRadioType(r) {
     // Already tagged? – leave it alone
     if (r.type) return r;
@@ -1714,12 +1778,220 @@ function tagRadioType(r) {
     if (typeof r.address === 'string' && /^https?:\/\//i.test(r.address)) {
         r.type      = 'stream';
         r.streamUrl = r.address;        // make explicit for later code
+        /*   Broadcastify Calls *
+           address looks like  bfcalls:5502-21001        */
+        } else if (/^bfcalls:/i.test(r.address)) {
+            r.type      = 'bfcalls';
+            r.type      = 'bfcalls';
+            r.callGroup = r.address.split(':')[1];   // "5502-21001"
+            r.bf        = {
+               pos      : Math.floor(Date.now()/1000) - startQueueSeconds,
+               queue    : [],
+               timerId  : null,
+               sessionKey : crypto.randomUUID()
+            };
     } else {
         r.type = 'radio';               // normal WebRTC radio
     }
     return r;
 }
+/******************************************************************
+ * Broadcastify “Calls” live-calls endpoint
+ ******************************************************************/
 
+function makeSessionKey () {
+    // use the browser / Electron crypto API if available
+    const bytes = (typeof crypto !== 'undefined' && crypto.getRandomValues)
+                ? crypto.getRandomValues(new Uint8Array(6))   // 6 bytes = 12 hex chars
+                : Buffer.from(require('crypto').randomBytes(6));
+
+    // build the hex string
+    const hex = [...bytes].map(b => b.toString(16).padStart(2,'0')).join('');
+    return hex.slice(0, 8) + '-' + hex.slice(8);              // 8-4 pattern
+}
+
+async function connectBfCalls(idx){
+    const r  = radios[idx];
+    console.info(`Connecting BF-Calls group ${r.callGroup}`);
+
+    if (!audio.context) {                   
+        startAudioDevices(); 
+    }
+    while (!audio.context || !audio.running) {
+
+        await new Promise(res => setTimeout(res, 50));
+    }
+    if (!window.bcfyAPI._loggedIn) {
+        try {
+            await window.bcfyAPI.login(config.Broadcastify.Username,config.Broadcastify.Password);
+       
+            window.bcfyAPI._loggedIn = true;                  // flag it
+            console.info('Broadcastify login OK');
+        } catch (err) {
+            console.error('Broadcastify login failed', err);
+            return;   
+        }
+    }
+
+    const el = new Audio();
+    el.crossOrigin = 'anonymous';
+    el.preload = 'none';
+    el.autoplay = false;
+    r.audioEl = el;
+
+    const src      = audio.context.createMediaElementSource(el);
+    const filter   = audio.context.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = audio.filterCutoff;
+
+    const agcNode   = audio.context.createDynamicsCompressor();
+    const makeup    = audio.context.createGain();
+    const gainNode  = audio.context.createGain();
+    const muteNode  = audio.context.createGain();
+    const panNode   = audio.context.createStereoPanner();
+    const analyser  = audio.context.createAnalyser();
+    const pcm       = new Float32Array(analyser.fftSize);
+
+    src.connect(filter);
+    filter.connect(agcNode);
+    agcNode.connect(makeup);
+    makeup.connect(muteNode);
+    makeup.connect(analyser);
+    muteNode.connect(gainNode);
+    gainNode.connect(panNode);
+    panNode.connect(audio.outputGain);
+
+    r.audioSrc = { audioNode:src, filterNode:filter, agcNode,
+                   makeupNode:makeup, gainNode, muteNode,
+                   panNode, analyzerNode:analyser, analyzerData:pcm };
+
+
+    el.addEventListener('ended', playNextClip);
+    el.addEventListener('error', playNextClip);
+
+    function playNextClip(){
+        var radioCard = $("#radio" + String(idx));
+        //set state to idle if we are not calls array is empty
+        if (r.bf.queue.length == 0) {
+            r.status = { 
+                State:'Idle',
+            }
+            updateCallerId(radioCard[0], "");
+            updateRadioCard(idx);
+            return;
+        }
+
+        if (!r.bf.queue.length) return;          // nothing queued yet
+        const clip = r.bf.queue.shift();         // {url,attrs}
+        el.src = clip.url;
+        el.play().catch(console.warn);
+
+        r.status = { State:'Receiving',
+                     ZoneName : clip.attrs.grouping || 'BF-Calls',
+
+                     ChannelName : clip.attrs.display || r.callGroup,
+                    }
+
+        var callerId  = clip.attrs.call_src_key;
+
+        callerId = callerId.replace(clip.attrs.sid, "");
+        callerId = callerId.replace("-", "");
+        updateCallerId(radioCard[0], "", clip.attrs.ts);
+        updateCallerId(radioCard[0], callerId, clip.attrs.ts);
+        
+
+        
+
+        updateRadioCard(idx);
+        checkAudioMeterCallback();
+    }
+
+
+    let polling      = false;
+    r.bf.sessionKey  = makeSessionKey();
+    r.bf.pos         = Math.floor(Date.now()/1000) - startQueueSeconds;
+
+    async function poll () {
+        if (polling) return;
+        polling = true;
+
+        const params = {
+            'groups[]' : r.callGroup,             // e.g. "5502-21001"
+            pos        : r.bf.pos,
+            doInit     : 0,
+            systemId   : 0,
+            sid        : 0,
+            sessionKey : r.bf.sessionKey
+        };
+
+        try {
+
+            const json = await window.bcfyAPI.liveCalls(params);
+            // console.log('BF-poll', json);
+
+            /* --- push every new clip into the queue ------------------ */
+            json.calls.forEach(c => {
+                if (c.ts <= r.bf.pos) return;               // already seen
+                r.bf.pos = Math.max(r.bf.pos, c.ts);
+
+                const url = `https://calls.broadcastify.com/${c.hash}/${c.systemId}/${c.filename}.${c.enc||'m4a'}`;
+                r.bf.queue.push({ url, attrs: c });
+            });
+
+            /* wake the player if it’s idle */
+            if (r.audioEL !==null && r.audioEl.paused && r.bf.queue.length){
+                playNextClip();
+            }
+
+        } catch (err) {
+            console.error('BF-poll failed', err);
+        } finally {
+            polling = false;
+            setTimeout(poll, 5000);               // ← re-arm 5 s later
+        }
+    }
+
+    poll();
+    r.bf.timerId = setInterval(poll, 5000);
+
+
+    $(`#radio${idx} .icon-connect`)
+        .removeClass('disconnected').addClass('connected')
+        .parent().prop('title','BF-Calls connected');
+
+    r.status = { State:'Connected',
+                 ZoneName:'BF-Calls',
+                 ChannelName: r.callGroup };
+    updateRadioCard(idx);
+    updateRadioAudio();
+}
+
+/* tidy up */
+function disconnectBfCalls(idx){
+    const r = radios[idx];
+    if (r.bf?.timerId) clearInterval(r.bf.timerId);
+    if (r.audioEl){
+        r.audioEl.pause();
+        r.audioEl.src = "";
+        r.audioEl.removeAttribute("src");
+        r.audioEl.load();
+        r.audioEl = null;
+    }
+    r.audioSrc = null;
+    r.status.State = 'Disconnected';
+
+    $(`#radio${idx} .icon-connect`)
+        .removeClass("connecting connected")
+        .addClass("disconnected")
+        .parent().prop("title","Disconnected");
+
+    updateRadioCard(idx);
+    checkAudioMeterCallback();
+
+  
+ 
+    updateCallerId($("#radio" + String(idx))[0], "");
+}
 /******************************************************************
  * Stream-RX voice-activity monitor
  ******************************************************************/
@@ -3241,9 +3513,8 @@ function sendDigit(digit, duration, delay) {
  * @param {int} idx index of radio in radios[]
  */
 function connectRadio(idx) {
-    if (radios[idx].type === "stream") {
-        return connectStreamRadio(idx);
-    }
+    if (radios[idx].type === "stream") return connectStreamRadio(idx);
+    if (radios[idx].type === 'bfcalls') return connectBfCalls(idx);
     // Log
     console.info(`Connecting to radio ${radios[idx].name}`);
     // Update radio connection icon
@@ -3344,10 +3615,9 @@ function waitForRadioStatus(idx, callback) {
  * @param {int} idx radio index in radios[]
  */
 function disconnectRadio(idx) {
-    if (radios[idx].type === "stream") {
-        return disconnectStreamRadio(idx);
-    }
-    // Disconnect if we had a connection open
+    if (radios[idx].type === 'stream')   return disconnectStreamRadio(idx);
+    if (radios[idx].type === 'bfcalls')  return disconnectBfCalls(idx);
+1    // Disconnect if we had a connection open
     if (radios[idx].wsConn) {
         if (radios[idx].wsConn.readyState == WebSocket.OPEN) {
             console.log(`Disconnecting from radio WebRTC connection ${radios[idx].name}`);
