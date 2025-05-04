@@ -2,6 +2,7 @@ const { app, BrowserWindow, ipcMain,session } = require('electron/main');
 const fetch     = (...a)=>import('node-fetch').then(({default:fetch})=>fetch(...a));
 const path = require('path')
 const fs = require('fs');
+const { parse } = require('csv-parse');
 
 const { SerialPort } = require('serialport');
 const midi = require('@julusian/midi');
@@ -390,7 +391,26 @@ ipcMain.handle('bcfy-login', async (_evt, user, pass) => {
     if (!res.ok) throw new Error(`live-calls HTTP ${res.status}`);
     return res.json();
 });
-  
+/*****************************************************************************
+/* Helper functions
+*****************************************************************************/
+
+ipcMain.handle('load-csv', async (event, filePath) => {
+    try {
+        const fileContent = await fs.promises.readFile(filePath, 'utf-8');
+        return new Promise((resolve, reject) => {
+            parse(fileContent, { columns: true, skip_empty_lines: true }, (err, records) => {
+                if (err) {
+                    reject({ success: false, error: err.message });
+                } else {
+                    resolve({ success: true, data: records });
+                }
+            });
+        });
+    } catch (error) {
+        return { success: false, error: error.message };
+    }
+});
 /***********************************************************************************
     App Runtime Entry Point
 ***********************************************************************************/

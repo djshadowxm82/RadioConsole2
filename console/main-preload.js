@@ -26,3 +26,6 @@ contextBridge.exposeInMainWorld('bcfyAPI', {
   login     : (u,p)      => ipcRenderer.invoke('bcfy-login',     u, p),
   liveCalls : paramsObj  => ipcRenderer.invoke('bcfy-liveCalls', paramsObj)
 });
+contextBridge.exposeInMainWorld('helpersAPI', {
+  loadCSV: (filePath) => ipcRenderer.invoke('load-csv', filePath),
+});

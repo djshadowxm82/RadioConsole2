@@ -2,6 +2,7 @@
     Global Variables
 ***********************************************************************************/
 
+
 // Config, read from main.js on page load
 var config = null;
 
@@ -584,26 +585,43 @@ document.getElementById('drawer-close').onclick = closeCallerDrawer;
 * @param {boolean} stream true if the radio is a stream
 * @return {string|null} the alias of the radio, or null if not found
 * */
-function getAlpha(id, system, stream = false) {
+async function getAlpha(id, system, stream = false) {
 
     if (stream){
         const idToAlpha = {};
         const csvFile = config?.Broadcastify?.aliasCsv;
+
+     
+
         if (csvFile){
-            const csvData = csvFile.split('\n');
-            for (const line of csvData) {
-                const [system, radioId, radioAlias] = line.split(',');
-                //check if the system is the same as the one we're looking for
-                if (system === system && radioId === id) {
-                    idToAlpha[radioId] = radioAlias;
+
+            csvData = await window.helpersAPI.loadCSV(csvFile);
+            // console.table(csvData.data.slice(0, 5));   // see what keys you actually have
+            if (csvData.success) {
+                const records = csvData.data;
+        
+                for (const record of records) {
+                    //check if the system id matches
+                    if (record.sysid !== system) continue;
+                    //check if the id matches
+                    if (record.id !== id) continue;
+                   
+                    const radioId = record.id;
+                    const radioAlias = record.alias;
+                    
+                    //check if the id is already in the map
+                    idToAlpha[String(radioId)] = radioAlias;
                 }
             }
+      
+  
         }
+  
         //check if the id is in the map
         if (idToAlpha[String(id)] === undefined){
             return null;
         }
-
+       
         return idToAlpha[String(id)] ?? null;
     }
     //we're not handling aliases for radios yet.
@@ -615,11 +633,12 @@ function getAlpha(id, system, stream = false) {
  * Show live caller-ID while the radio is Receiving.
  * Only when the call *finishes* does the ID get added to the scroll-back.
  *
+ * @param {object} radio  – the radio object
  * @param {HTMLElement} cardEl – the .radio-card element
  * @param {string|null} idStr  – the current caller-ID (null/"" when idle)
  * @param {number} timestamp – optional timestamp for the caller ID
  */
-function updateCallerId(cardEl, idStr,timestamp = null) {
+function updateCallerId(radio, cardEl, idStr,timestamp = null) {
     // this object lives for the lifetime of the element
     if (!cardEl._cidState){
         cardEl._cidState = {
@@ -631,17 +650,31 @@ function updateCallerId(cardEl, idStr,timestamp = null) {
     const live = cardEl.querySelector('.callerid-live');
     const log  = cardEl.querySelector('.caller-log');
 
+    const isStream = radio.type === "stream" || radio.type === "bfcalls";
+    var sysid = "";
+    if(radio.type === "bfcalls"){
+    
+      sysid = radio.address.split(':')[1].split('-')[0];
+
+    }
+    var alias = null; // default to no alias
     /*  radio is Receiving  */
     if (idStr){                     // non-empty ⇒ still RX’ing
-       
+        
+        var aliasPromise = (async () => {
+         return await getAlpha(idStr, sysid, isStream);
+        })();
 
-        const alias = getAlpha(idStr);
-        if (alias) {
-            st.liveId = alias;
-            live.textContent = alias; 
-        }else{
-            live.textContent = idStr;   // update live line
-        }
+        aliasPromise.then((alias) => {
+            if (alias) {
+                st.liveId = alias;
+                live.textContent = alias; 
+            }else{
+                live.textContent = idStr;   // update live line
+            }
+        });
+
+
         st.liveId = idStr;          // remember it  
         st.active = true;           // mark "call in progress"
         
@@ -655,18 +688,25 @@ function updateCallerId(cardEl, idStr,timestamp = null) {
             
             const date = new Date(timestamp * 1000);
             timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: false});
-            console.log ("Timestamp: " + timeStr);
+            // console.log ("Timestamp: " + timeStr);
         }else{
         timeStr =
         (config?.ClockFormat === "UTC")
             ? getTimeUTC("HH:mm:ss")   
             : getTimeLocal("HH:mm:ss");
         }
-      
-        const alias = getAlpha(st.liveId);
-        if (alias) {
-            st.liveId = alias;
-        }
+        var aliasPromise = (async () => {
+            return await getAlpha(st.liveId, radio.address, isStream);
+           })();
+
+        aliasPromise.then((alias) => {
+
+
+            if (alias) {
+                st.liveId = alias;
+            }
+        });
+    
         
         // build one <li> row and stick it on top of the UL
         const li = document.createElement('li');
@@ -880,7 +920,8 @@ function updateRadioCard(idx) {
     }
     // Update caller ID
     if (radio.status.CallerId != null) {
-        updateCallerId(radioCard[0], radio.status.CallerId);
+
+        updateCallerId(radio, radioCard[0], radio.status.CallerId);
     }
     
     // Remove all current classes
@@ -1876,7 +1917,7 @@ async function connectBfCalls(idx){
             r.status = { 
                 State:'Idle',
             }
-            updateCallerId(radioCard[0], "");
+            updateCallerId(r,radioCard[0], "");
             updateRadioCard(idx);
             return;
         }
@@ -1896,8 +1937,8 @@ async function connectBfCalls(idx){
 
         callerId = callerId.replace(clip.attrs.sid, "");
         callerId = callerId.replace("-", "");
-        updateCallerId(radioCard[0], "", clip.attrs.ts);
-        updateCallerId(radioCard[0], callerId, clip.attrs.ts);
+        updateCallerId(r,radioCard[0], "", clip.attrs.ts);
+        updateCallerId(r,radioCard[0], callerId, clip.attrs.ts);
         
 
         
@@ -1939,7 +1980,8 @@ async function connectBfCalls(idx){
             });
 
             /* wake the player if it’s idle */
-            if (r.audioEL !==null && r.audioEl.paused && r.bf.queue.length){
+            if (r.audioEl === null) return;             // no audio yet
+            if (r.audioEl.paused && r.bf.queue.length){
                 playNextClip();
             }
 
@@ -1990,7 +2032,7 @@ function disconnectBfCalls(idx){
 
   
  
-    updateCallerId($("#radio" + String(idx))[0], "");
+    updateCallerId(r,$("#radio" + String(idx))[0], "");
 }
 /******************************************************************
  * Stream-RX voice-activity monitor
