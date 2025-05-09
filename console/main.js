@@ -28,6 +28,7 @@ let midiInput = new midi.Input();
  * Reads the config file and returns the JSON inside
  */
 async function readConfig(defaultConfig) {
+    let cfgObj;
     // Check for existing config file
     if (!fs.existsSync(configPath)) {
         console.warn("No config.json file found, creating default at " + configPath);
@@ -43,6 +44,14 @@ async function readConfig(defaultConfig) {
     } else {
         console.log("Reading config file from " + configPath);
         const configJson = fs.readFileSync(configPath, { encoding: 'utf8', flag: 'r' });
+        
+        cfgObj = JSON.parse(configJson);
+        
+        setBroadcastifyCreds(
+            cfgObj.Broadcastify?.Username || '',
+            cfgObj.Broadcastify?.Password || ''
+          );
+
         return configJson;
     }
 }
@@ -317,80 +326,125 @@ async function createMidiWindow(midiConfig)
  * Broadcastify functions
  * These are used to login and get the live calls
  ************************************************************************************/
+const BCFY = {
+    user      : null,
+    pass      : null,
+    lastLogin : 0,             // epoch‑ms
+    cookieTTL : 55 * 60 * 1000,// 55 min – a bit less than the real 60 min TTL
+    loginJob  : null           // Promise while a login is inflight
+  };
 
-async function cookieHeader () {
-    const jar = await session.defaultSession.cookies.get({
-        url : 'https://www.broadcastify.com'
-    });
-    return jar.map(c => `${c.name}=${c.value}`).join('; ');
+  /* call once, e.g. right after you read config */
+function setBroadcastifyCreds (user, pass){
+    BCFY.user = user;
+    BCFY.pass = pass;
 }
+
+async function ensureLogin (){
+
+    /*  already good?  */
+    if (Date.now() - BCFY.lastLogin < BCFY.cookieTTL) return;
   
-/* ----------------   LOGIN   ------------------------------- */
-ipcMain.handle('bcfy-login', async (_evt, user, pass) => {
-    const body = new URLSearchParams({
-        username : user,
-        password : pass,
-        action   : 'auth',
-        redirect : '/calls/'              // same as the web site
-    });
-
-
-    const res = await fetch('https://www.broadcastify.com/login/', {
-        method  : 'POST',
-        headers : { 'Content-Type':'application/x-www-form-urlencoded' },
-        redirect: 'manual', 
-        body
-    });
-    if (!res.ok && res.status !== 302) 
-        throw new Error(`login HTTP ${res.status}`);
-    
-    const location = res.headers.get('location');
-
-    if (location && location.includes('failed=1')) {
-        throw new Error('Login failed');
-    }
-
-    const raw = res.headers.raw()['set-cookie'] ?? [];
-    const store = session.defaultSession.cookies;
-
-    for (const line of raw) {
-        const [cookiePart]     = line.split(';');
-        const [name, value]    = cookiePart.split('=');
-
-        await store.set({
-        url      : 'https://www.broadcastify.com',
-        domain   : '.broadcastify.com',
-        path     : '/',
-        secure   : true,
-        httpOnly : false,
-        sameSite : 'no_restriction',
-        name, value
+    /*  another call is already doing the login – wait for it  */
+    if (BCFY.loginJob) return BCFY.loginJob;
+  
+    /*  otherwise: start a fresh login  */
+    BCFY.loginJob = (async ()=>{
+        const body = new URLSearchParams({
+          username : BCFY.user,
+          password : BCFY.pass,
+          action   : 'auth',
+          redirect : '/calls/'
         });
-    }
-    return true; 
+        
+        const res = await fetch('https://www.broadcastify.com/login/', {
+          method  : 'POST',
+          headers : { 'Content-Type':'application/x-www-form-urlencoded' },
+          redirect: 'manual'
+        , body });
+  
+        if (!(res.ok || res.status === 302))
+            throw new Error(`login HTTP ${res.status}`);
+  
+        /*  store all Set‑Cookie headers into Electron’s session  */
+        const raw   = res.headers.raw()['set-cookie'] ?? [];
+        const store = session.defaultSession.cookies;
+        for (const line of raw){
+          const [kv]          = line.split(';');         // “name=value”
+          const [name,value]  = kv.split('=');
+          await store.set({
+            url    :'https://www.broadcastify.com',
+            domain :'.broadcastify.com',
+            path   :'/',
+            secure :true,
+            name, value
+          });
+        }
+        BCFY.lastLogin = Date.now();
+        console.log('[BCFY] login OK');
+    })()
+    .catch(err=>{
+        console.error('[BCFY] login failed',err);
+        throw err;
+    })
+    .finally(()=>{
+        BCFY.loginJob = null;
     });
+  
+    return BCFY.loginJob;
+  }
+  
+  
+  async function cookieHeader (){
+    const jar = await session.defaultSession.cookies.get({
+      url:'https://www.broadcastify.com'
+    });
+    return jar.map(c=>`${c.name}=${c.value}`).join('; ');
+  }
+  
+  let lastApiCall = 0;                 // epoch‑ms
+  const MIN_INTERVAL = 1_500;          // at most one request / 1.5 s
+  
+  ipcMain.handle('bcfy-liveCalls', async (_evt, paramsObj)=>{
 
-/* ----------------   LIVE CALLS   ------------------------------- */
-    ipcMain.handle('bcfy-liveCalls', async (_evt, paramsObj) => {
+    const now = Date.now();
+    if (now - lastApiCall < MIN_INTERVAL){
+      await new Promise(r=>setTimeout(r, MIN_INTERVAL - (now-lastApiCall)));
+    }
+    lastApiCall = Date.now();
+  
+    /*  silently refresh cookie if needed  */
+    await ensureLogin();
+  
     const body   = new URLSearchParams(paramsObj);
     const cookie = await cookieHeader();
-
+  
     const res = await fetch(
         'https://www.broadcastify.com/calls/apis/live-calls',
         {
-        method  : 'POST',
-        headers : {
+          method  : 'POST',
+          headers : {
             'Content-Type'     :'application/x-www-form-urlencoded; charset=UTF-8',
             'X-Requested-With' :'XMLHttpRequest',
             'Origin'           :'https://www.broadcastify.com',
             'Referer'          :'https://www.broadcastify.com/calls/',
             'Cookie'           : cookie
-        },
-        body
+          },
+          body
         });
+  
+    /*  if the cookie still expired → one *forced* relogin, retry once */
+    if (res.status === 403){
+        console.warn('[BCFY] 403 - trying to refresh login');
+        BCFY.lastLogin = 0;          // force ensureLogin() to relogin
+        await ensureLogin();
+        return ipcMain.handlers['bcfy-liveCalls'](_evt, paramsObj); // retry once
+    }
+  
     if (!res.ok) throw new Error(`live-calls HTTP ${res.status}`);
     return res.json();
-});
+  });
+
 /*****************************************************************************
 /* Helper functions
 *****************************************************************************/
