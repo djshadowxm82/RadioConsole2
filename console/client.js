@@ -4,6 +4,7 @@
 
 // Config, read from main.js on page load
 var config = null;
+let editingRadioIdx = null;
 
 // Default config values
 const defaultConfig = {
@@ -324,6 +325,9 @@ $(document).on("keydown", function (e) {
     switch (e.which) {
         // Spacebar
         case 32:
+            if (document.activeElement.tagName == "INPUT" || document.activeElement.tagName == "TEXTAREA") {
+                return;
+            }
             e.preventDefault();
             startPtt(true);
             break;
@@ -703,7 +707,7 @@ function populateRadios() {
         // Add the radio card
         addRadioCard("radio" + String(index), radio.name, radio.color);
         // Update edit list
-        addRadioToEditTable(radio);
+        addRadioToEditTable(radio, index);
         // Populate its text
         updateRadioCard(index);
     });
@@ -750,10 +754,70 @@ function addRadioCard(id, name, color) {
     $("#main-layout").append(newCard);
 }
 
-function addRadioToEditTable(radio) {
-    $("#edit-radios-table tr:last").after(`
-        <tr><td>${radio.name}</td><td>${radio.address}</td><td>${radio.port}</td><td><a href="#" onclick="deleteRadio(this, '${radio.name}')"><ion-icon name='trash-bin-sharp'></ion-icon></a></td></tr>
-    `);
+
+/* quick helper – wipe rows & repopulate the table */
+function rebuildEditTable (){
+   $('#edit-radios-table tr:gt(0)').remove();       // keep header
+   radios.forEach((r,i)=>addRadioToEditTable(r,i));
+}
+
+// function addRadioToEditTable(radio) {
+//     $("#edit-radios-table tr:last").after(`
+//         <tr><td>${radio.name}</td><td>${radio.address}</td><td>${radio.port}</td><td><a href="#" onclick="deleteRadio(this, '${radio.name}')"><ion-icon name='trash-bin-sharp'></ion-icon></a></td></tr>
+//     `);
+// }
+
+function addRadioToEditTable (radio, idx){
+    $("#edit-radios-table").append(`
+      <tr data-idx="${idx}">
+        <td>
+          ${radio.name}
+        </td>
+        <td>${radio.address}</td>
+        <td>${radio.port}</td>
+        <td>
+            <a href="#" onclick="beginEditRadio(${idx});return false;">
+                <ion-icon name="create-sharp"></ion-icon>
+            </a>  
+            <a href="#" onclick="deleteRadio(this,'${radio.name}')">
+                <ion-icon name="trash-bin-sharp"></ion-icon>
+            </a>
+        </td>
+      </tr>`);
+
+}
+
+function beginEditRadio (idx){
+    editingRadioIdx = idx;
+    const pop = $('#edit-radio-popup');
+
+    /* preload fields */
+    console.log(`Editing radio ${idx}`);
+
+    pop.find('#new-radio-address').val(radios[idx].address);
+    pop.find('#new-radio-port')   .val(radios[idx].port);
+    pop.find('#new-radio-color')  .val(radios[idx].color);
+    pop.find('#new-radio-pan')    .val(radios[idx].pan ?? 0);
+
+
+    const sel = pop.find('#new-radio-layout').empty();
+
+    
+
+    Object.values(config.Layouts).forEach((layout) => {
+        const opt = document.createElement('option');
+        opt.value = layout.name;
+        opt.textContent = layout.name;
+        sel.append(opt);
+    });
+    
+    sel.val(radios[idx].layout || Object.keys(config.Layouts)[0]);
+
+
+    pop.find('.topcoat-button--cta').last().text('Save');
+
+    /* use the *existing* opener */
+    showConfigPopup('#edit-radio-popup');
 }
 
 function deleteRadio(editRow, name) {
@@ -776,6 +840,7 @@ function deleteRadio(editRow, name) {
             found = true;
         }
     });
+    refreshLayoutView();
     if (!found) {
         alert("Failed to delete radio!");
     }
@@ -1339,9 +1404,32 @@ function toggleMainMenu() {
  * @param {string} id element ID of the popup to show
  */
 function showConfigPopup(id) {
-    console.debug(`Showing popup ${id}`);
+    console.log(`Showing popup ${id}`);
     $("#body-dimmer").show();
     $(id).show();
+    
+    
+
+    if(id == "#add-radio-popup") {
+        //populate the layout new-radio-layout
+        $("#new-radio-layout").empty();
+        const sel = $('#new-radio-layout').empty();
+        config.Layouts.forEach(l=>sel.append(`<option>${l.name}</option>`));
+
+        // radios.forEach((radio, index) => {
+        //     // Add the radio card
+        //     const sel  = document.getElementById('new-radio-layout');
+        //     sel.innerHTML = '';             // wipe old <option>s
+        //     Object.values(config.Layouts).forEach((layout) => {
+        //         const opt = document.createElement('option');
+        //         opt.value = layout.name;
+        //         opt.textContent = layout.name;
+        //         sel.appendChild(opt);
+        //     });
+            
+        // });
+
+    }
 }
 
 /**
@@ -1542,6 +1630,9 @@ async function readConfig() {
     // Populate radio cards
     populateRadios();
 
+    //Build layout tabs
+    buildLayoutTabs();
+
     // If autoconnect is specified, autoconnect!
     if (config.Autoconnect) {
         connectAllButton();
@@ -1596,64 +1687,241 @@ async function saveConfig() {
 
 }
 
-function newRadioClear() {
-    $('#new-radio-address').val('');
-    $('#new-radio-port').val('');
-    $('#new-radio-pan').val(0);
+let currentLayout = null;          // name of the active tab
+
+function buildLayoutTabs (){
+    const bar = document.getElementById('layout-tabs');
+    bar.innerHTML = '';                                       // wipe
+
+    config.Layouts.forEach((lay,idx)=>{
+        const btn   = document.createElement('button');
+        btn.textContent   = lay.name;
+        btn.dataset.name  = lay.name;
+        btn.onclick       = ()=>showLayout(lay.name);
+        if (idx===0) btn.classList.add('active');             // default tab
+        bar.appendChild(btn);
+    });
+
+    currentLayout = config.Layouts[0].name;                   // fire once
+    refreshLayoutView();
 }
 
-function newRadioAdd() {
-    // Get values
-    const newRadioAddress = $('#new-radio-address').val();
-    const newRadioPort = $('#new-radio-port').val();
-    const newRadioColor = $('#new-radio-color').val();
-    const newRadioPan = $('#new-radio-pan').val();
+function refreshLayoutView (){
+    radios.forEach((r,i)=>{
+        const card = document.getElementById(`radio${i}`);
+        if (!card) return;
 
-    // Create the new radio entry
-    var newRadio = {
-        address: newRadioAddress,
-        port: newRadioPort,
-        color: newRadioColor,
-        pan: newRadioPan,
-    };
+        const show = currentLayout==='All' || r.layout===currentLayout;
+        card.style.display = show ? '' : 'none';
+    });
+}
 
-    // Validate
-    if (!validColors.includes(newRadio.color)) {
-        console.warn(`Color ${newRadio.color} not valid, defaulting to blue`);
-        radios[idx].color = "blue";
+function showLayout (name) {
+    currentLayout = name;
+
+    /* highlight active tab */
+    document.querySelectorAll('#layout-tabs button')
+            .forEach(b => b.classList.toggle('active',
+                              b.dataset.name === name));
+
+    /* show / hide cards */
+    radios.forEach((r, idx) => {
+        const card = document.getElementById(`radio${idx}`);
+        if (!card) return;                       // safety
+
+        const belongs = (name === 'All') || (r.layout === name);
+        card.style.display = belongs ? '' : 'none';
+    });
+}
+
+function loadLayoutsTable () {
+    const tbl = document.getElementById('layouts-table');
+    tbl.querySelectorAll('tr:not(:first-child)').forEach(tr => tr.remove());
+
+    config.Layouts.forEach(lay => {
+        /* work out how many cards point at this layout */
+        const cardCount = (lay.name === 'All')
+            ? radios.length                               // special tab
+            : radios.filter(r => r.layout === lay.name).length;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${lay.name}</td>
+          <td>${cardCount}</td>
+          <td>
+             ${lay.name === 'All' ? '' :
+              `<a href="#" onclick="deleteLayout('${lay.name}')">
+                  <ion-icon name="trash-sharp"></ion-icon>
+               </a>`}
+          </td>`;
+        tbl.appendChild(tr);
+    });
+}
+
+function addLayout () {
+    const name = document.getElementById('new-layout-name').value.trim();
+    if (!name) { alert('Enter a name'); return; }
+    if (config.Layouts.some(l => l.name === name)) {
+        alert('Layout already exists'); return;
     }
 
-    // Save config
-    config.Radios.push(newRadio);
+    config.Layouts.push({ name });
+    document.getElementById('new-layout-name').value = '';
+
     saveConfig();
-    
-    // Populate default values
-    newRadio.status = { State: 'Disconnected' };
-    newRadio.rtc = {};
-    newRadio.wsConn = null;
-    newRadio.audioSrc = null;
-
-    // Get the index
-    var newRadioIdx = radios.length;
-
-    // Default name (used for logging until we get the proper name)
-    newRadio.name = `Radio ${newRadioIdx}`;
-
-    // Append to config
-    radios.push(newRadio);
-
-    // Populate new radio
-    console.log("Adding radio " + newRadio.name);
-    // Add the radio card
-    addRadioCard("radio" + String(newRadioIdx), newRadio.name, newRadio.color);
-    // Populate its text
-    updateRadioCard(newRadioIdx);
-    // Update edit list
-    addRadioToEditTable(newRadio);
-    // Clear form
-    newRadioClear();
+    buildLayoutTabs();
+    loadLayoutsTable();
 }
 
+function deleteLayout (name) {
+    if (!confirm(`Delete layout "${name}" ?`)) return;
+
+    config.Layouts = config.Layouts.filter(l => l.name !== name);
+
+    radios.forEach(r => { if (r.layout === name) r.layout = 'All'; });
+
+    saveConfig();
+    buildLayoutTabs();
+    loadLayoutsTable();
+    showLayout(currentLayout === name ? 'All' : currentLayout);
+}
+
+function newRadioClear() {
+    editingRadioIdx = null;
+    $('#add-radio-popup, #edit-radio-popup')
+    .find('#new-radio-address, #new-radio-port').val('');
+    $('#new-radio-pan').val(0);
+    /* restore button text */
+    $('#add-radio-popup .topcoat-button--cta').last().text('Add');
+    $('#edit-radio-popup .topcoat-button--cta').last().text('Save');
+    // $('#new-radio-address').val('');
+    // $('#new-radio-port').val('');
+    // $('#new-radio-pan').val(0);
+
+}
+
+// function newRadioAdd() {
+//     // Get values
+//     const newRadioAddress = $('#new-radio-address').val();
+//     const newRadioPort = $('#new-radio-port').val();
+//     const newRadioColor = $('#new-radio-color').val();
+//     const newRadioPan = $('#new-radio-pan').val();
+//     const newRadioLayout = $('#new-radio-layout').val();
+
+//     // Create the new radio entry
+//     var newRadio = {
+//         address: newRadioAddress,
+//         port: newRadioPort,
+//         color: newRadioColor,
+//         pan: newRadioPan,
+//         layout: newRadioLayout,
+//     };
+
+//     // Validate
+//     if (!validColors.includes(newRadio.color)) {
+//         console.warn(`Color ${newRadio.color} not valid, defaulting to blue`);
+//         radios[idx].color = "blue";
+//     }
+
+//     // Save config
+//     config.Radios.push(newRadio);
+
+//     // add it to the chosen tab
+//     const idx = config.Radios.length - 1;
+//     if (!config.Layouts[newRadioLayout]) config.Layouts[newRadioLayout] = [];
+//     config.Layouts[newRadioLayout].push(idx);
+    
+//     saveConfig();
+    
+
+
+//     uts[newRadioLayout] = [];
+//     config.Layouts[newRadioLayout].push(idx);
+//     // Populate default values
+//     newRadio.status = { State: 'Disconnected' };
+//     newRadio.rtc = {};
+//     newRadio.wsConn = null;
+//     newRadio.audioSrc = null;
+
+//     // Get the index
+//     var newRadioIdx = radios.length;
+
+//     // Default name (used for logging until we get the proper name)
+//     newRadio.name = `Radio ${newRadioIdx}`;
+
+//     // Append to config
+//     radios.push(newRadio);
+
+//     // Populate new radio
+//     console.log("Adding radio " + newRadio.name);
+//     // Add the radio card
+//     addRadioCard("radio" + String(newRadioIdx), newRadio.name, newRadio.color);
+//     // Populate its text
+//     updateRadioCard(newRadioIdx);
+//     // Update edit list
+//     addRadioToEditTable(newRadio);
+//     // Clear form
+//     newRadioClear();
+
+//     refreshLayoutView();
+// }
+function newRadioAdd (){
+
+    /* shared form refs (parent may be add‑ or edit‑popup) */
+    const p   = $(event.target).closest('.popup');    // which popup was open
+    const val = sel => p.find(sel).val();
+
+
+
+    const data = {
+        address : val('#new-radio-address').trim(),
+        port    : val('#new-radio-port'),
+        color   : val('#new-radio-color'),
+        pan     : parseFloat(val('#new-radio-pan') || 0),
+        layout  : val('#new-radio-layout')
+    };
+  
+    /* ───── Add mode ───── */
+    if (editingRadioIdx === null){
+  
+        radios.push({
+          ...data,
+          name   : `Radio ${radios.length}`,
+          status : { State:'Disconnected' },
+          layout : data.layout,
+          rtc    : {}, wsConn:null, audioSrc:null
+        });
+        config.Radios.push({...data});
+        addRadioCard(`radio${radios.length-1}`, `Radio ${radios.length-1}`, data.color);
+        addRadioToEditTable(radios[radios.length-1], radios.length-1);
+        updateRadioCard(radios.length-1);
+  
+    /* ───── Edit mode ───── */
+    }else{
+        const idx = editingRadioIdx;
+        Object.assign(radios[idx], data);
+        Object.assign(config.Radios[idx], data);
+  
+        /* move card to new layout if changed – simple setter */
+        radios[idx].layout = data.layout;
+          
+        /* update card visuals */
+        const card = $(`#radio${idx}`);
+        validColors.forEach(c=>card.removeClass(c));
+        card.addClass(data.color);
+        updateRadioCard(idx);
+  
+        /* refresh table */
+        rebuildEditTable();
+        editingRadioIdx = null;
+    }
+  
+    /* housekeeping */
+    saveConfig();
+    refreshLayoutView();
+    newRadioClear();                                   // reset form for next time
+  }
+  
 /***********************************************************************************
     WebRTC Functions
 
@@ -2350,6 +2618,8 @@ function audioMeterCallback() {
 
 function checkAudioMeterCallback()
 {
+    if (document.getElementById(`radio${idx}`).style.display === 'none')
+    return;
     // Get the overall "audio doing something" status (we check classes instead of actual statuses to account for the latency delays)
     console.debug("Checking if any radio's audio is active");
     audio_active = false;

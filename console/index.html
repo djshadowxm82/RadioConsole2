@@ -81,6 +81,12 @@
                 <div class="btn"><ion-icon name="pencil-sharp"></ion-icon></div>
             </div>
 
+            <!-- Edit Layouts Button -->
+            <div id="navbar-layouts" class="navbar-item" title="Edit Layouts"
+                onclick="showConfigPopup('#edit-layouts-popup');loadLayoutsTable()">
+                <div class="btn"><ion-icon name="apps-sharp"></ion-icon></div>
+            </div>
+
             <!-- Extension Connect/Disconnect Button -->
             <div id="navbar-ext" class="navbar-item disconnected" title="Connect to extension" onclick="extensionConnect()">
                 <div class="btn"><ion-icon name="magnet-sharp"></ion-icon></div>
@@ -155,7 +161,10 @@
                     </li>
                 </ul>
             </div>
-
+            <!-- Tabs Container -->
+            <nav id="layout-tabs" class="tabs">
+               
+            </nav>
             <!-- Main Layout for Radio Entries -->
             <div id="main-layout">
 
@@ -491,6 +500,90 @@
                             </select>
                         </td>
                     </tr>
+                    <tr>
+                        <td>
+                            <h3>Layout Assignment</h3>
+                        </td>
+                        <td>
+                            <select id="new-radio-layout" required>
+                                <!-- JS will populate this with the current layouts -->
+                            </select>
+                        </td>
+                    </tr>
+                    <!-- Default Pan Value -->
+                    <tr>
+                        <td>
+                            <h3>Default Pan</h3>
+                        </td>
+                        <td>
+                            <input type="range" min="-1" max="1" value="0" step="0.1" id="new-radio-pan">
+                        </td>
+                    </tr>
+                    <!-- Add/Cancel buttons -->
+                    <tr>
+                        <td style="text-align: right;">
+                            <button class="topcoat-button--cta" onclick="newRadioClear();closePopup(this);">Cancel</button>
+                        </td>
+                        <td>
+                            <button class="topcoat-button--cta" onclick="newRadioAdd();closePopup(this);">Add</button>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>        
+        <!-- Edit Radio Popup -->
+        <div id="edit-radio-popup" class="popup" style="display: none">
+            <div class="popup-header">
+                <h2>Edit Radio</h2>
+                <div class="popup-buttons">
+                    <a href="#" onclick="closePopup(this)"><ion-icon name="close-circle-sharp"></ion-icon></a>
+                </div>
+            </div>
+            <div class="popup-content">
+                <table class="popup-table">
+                    <!-- Daemon Address -->
+                    <tr>
+                        <td>
+                            <h3>Daemon Address</h3>
+                        </td>
+                        <td>
+                            <input type="text" id="new-radio-address" class="topcoat-text-input" placeholder="127.0.0.1" value="">
+                        </td>    
+                    </tr>
+                    <!-- Daemon Port -->
+                    <tr>
+                        <td>
+                            <h3>Daemon Port</h3>
+                        </td>
+                        <td>
+                            <input type="text" id="new-radio-port" class="topcoat-text-input" placeholder="8801" value="" maxlength="5">
+                        </td>    
+                    </tr>
+                    <!-- Card Color -->
+                    <tr>
+                        <td>
+                            <h3>Card Color</h3>
+                        </td>
+                        <td>
+                            <select id="new-radio-color">
+                                <option value="red" selected="selected">Red</option>
+                                <option value="amber">Amber</option>
+                                <option value="green">Green</option>
+                                <option value="blue">Blue</option>
+                                <option value="purple">Purple</option>
+                            </select>
+                        </td>
+                    </tr>
+                    <tr>
+                        <td>
+                            <h3>Layout Assignment</h3>
+                        </td>
+                        <td>
+                            <select id="new-radio-layout" required>
+                                <!-- JS will populate this with the current layouts -->
+                            </select>
+                        </td>
+                    </tr>
                     <!-- Default Pan Value -->
                     <tr>
                         <td>
@@ -527,13 +620,49 @@
                         <th>Name</th>
                         <th>Address</th>
                         <th>Port</th>
-                        <th>Delete</th>
+                        <th>Actions</th>
                     </tr>
                 </table>
                 <div style="padding: 4px; font-size: 18px;"><a href="#" onclick="showConfigPopup('#add-radio-popup')"><ion-icon name="add-circle-sharp"></ion-icon></a></div>
             </div>
         </div>
 
+        <!-- Edit Layouts Popup -->
+        <div id="edit-layouts-popup" class="popup" style="display:none">
+            <div class="popup-header">
+                <h2>Edit Layouts</h2>
+                <div class="popup-buttons">
+                    <a href="#" onclick="closePopup(this)">
+                        <ion-icon name="close-circle-sharp"></ion-icon>
+                    </a>
+                </div>
+            </div>
+        
+            <div class="popup-content">
+                <table id="layouts-table">
+                    <tr>
+                        <th>Name</th>
+                        <th># Cards</th>
+                        <th>Actions</th>
+                    </tr>
+                </table>
+        
+                <hr>
+        
+                <table class="popup-table">
+                    <tr>
+                        <td><h3>New Layout Name</h3></td>
+                        <td>
+                            <input type="text" id="new-layout-name" class="topcoat-text-input" placeholder="Ops B" />
+                        </td>
+                        <td style="text-align:right">
+                            <button class="topcoat-button--cta" onclick="addLayout()">Add</button>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+  
         <!-- Extension Config Popup -->
         <div id="extension-config-popup" class="popup" style="display: none;">
             <div class="popup-header">
