@@ -266,6 +266,7 @@ ion-icon {
 #navbar-connect,
 #navbar-ext,
 #navbar-call-log,
+#navbar-layouts,
 #navbar-edit {
     float: right;
     padding-left: 0;
@@ -392,6 +393,16 @@ ion-icon {
 .sidebar ul li a.active:before {
     display: block;
 }
+
+.tabs {
+    display:flex; gap:.5rem; padding:.3rem .6rem; border-bottom:1px solid #444;
+}
+.tabs button {
+    padding:.3rem .9rem; border:none; background:none; color:#ccc;
+    font-weight:600; cursor:pointer; border-radius:.4rem;
+}
+.tabs button.active       { background:#2b6cb0; color:#fff; }
+.tabs button:hover:not(.active) { background:#444; }
 
 #main-layout {
     width: 100%;
@@ -1309,6 +1320,21 @@ ion-icon {
     color: var(--color-alert-red-light);
 }
 
+#layouts-table {
+    width: 100%;
+    text-align: left;
+    color: var(--color-txt-light);
+    border-spacing: 0;
+    background-color: var(--color-bg-dark);
+}
+#layouts-table th {
+    background-color: var(--color-accent-dark);
+    padding: 4px;
+}
+#layouts-table td {
+    padding: 4px;
+}
+
 #edit-radios-table {
     width: 100%;
     text-align: left;
@@ -1328,11 +1354,13 @@ ion-icon {
 
 .popup a {
     color: var(--color-txt-light);
+    text-decoration: unset;
 }
 
-#add-radio-popup {
+#add-radio-popup, #edit-radio-popup, #edit-layouts-popup {
     z-index: 6;
 }
+
 
 /********************************
     Animations
