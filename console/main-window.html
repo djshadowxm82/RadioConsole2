@@ -81,6 +81,12 @@
                 <div class="btn"><ion-icon name="pencil-sharp"></ion-icon></div>
             </div>
 
+            <!-- Edit Layouts Button -->
+            <div id="navbar-layouts" class="navbar-item" title="Edit Layouts"
+                onclick="showConfigPopup('#edit-layouts-popup');loadLayoutsTable()">
+                <div class="btn"><ion-icon name="apps-sharp"></ion-icon></div>
+            </div>
+
             <!-- Extension Connect/Disconnect Button -->
             <div id="navbar-ext" class="navbar-item disconnected" title="Connect to extension" onclick="extensionConnect()">
                 <div class="btn"><ion-icon name="magnet-sharp"></ion-icon></div>
@@ -155,7 +161,10 @@
                     </li>
                 </ul>
             </div>
-
+            <!-- Tabs Container -->
+            <nav id="layout-tabs" class="tabs">
+               
+            </nav>
             <!-- Main Layout for Radio Entries -->
             <div id="main-layout">
 
@@ -470,6 +479,42 @@
             </div>
         </div>
 
+        <!-- Edit Layouts Popup -->
+        <div id="edit-layouts-popup" class="popup" style="display:none">
+            <div class="popup-header">
+                <h2>Edit Layouts</h2>
+                <div class="popup-buttons">
+                    <a href="#" onclick="closePopup(this)">
+                        <ion-icon name="close-circle-sharp"></ion-icon>
+                    </a>
+                </div>
+            </div>
+        
+            <div class="popup-content">
+                <table id="layouts-table">
+                    <tr>
+                        <th>Name</th>
+                        <th># Cards</th>
+                        <th>Actions</th>
+                    </tr>
+                </table>
+        
+                <hr>
+        
+                <table class="popup-table">
+                    <tr>
+                        <td><h3>New Layout Name</h3></td>
+                        <td>
+                            <input type="text" id="new-layout-name" class="topcoat-text-input" placeholder="Ops B" />
+                        </td>
+                        <td style="text-align:right">
+                            <button class="topcoat-button--cta" onclick="addLayout()">Add</button>
+                        </td>
+                    </tr>
+                </table>
+            </div>
+        </div>
+  
         <!-- Extension Config Popup -->
         <div id="extension-config-popup" class="popup" style="display: none;">
             <div class="popup-header">

@@ -2,8 +2,10 @@
     Global Variables
 ***********************************************************************************/
 
+
 // Config, read from main.js on page load
 var config = null;
+let editingRadioIdx = null;
 
 // Default config values
 const defaultConfig = {
@@ -336,6 +338,9 @@ $(document).on("keydown", function (e) {
     switch (e.which) {
         // Spacebar
         case 32:
+            if (document.activeElement.tagName == "INPUT" || document.activeElement.tagName == "TEXTAREA") {
+                return;
+            }
             e.preventDefault();
             // Start PTT if not already TXing
             if (!pttActive) {
@@ -610,10 +615,12 @@ document.getElementById('drawer-close').onclick = closeCallerDrawer;
  * Show live caller-ID while the radio is Receiving.
  * Only when the call *finishes* does the ID get added to the scroll-back.
  *
+ * @param {object} radio  – the radio object
  * @param {HTMLElement} cardEl – the .radio-card element
  * @param {string|null} idStr  – the current caller-ID (null/"" when idle)
+ * @param {number} timestamp – optional timestamp for the caller ID
  */
-function updateCallerId(cardEl, idStr){
+function updateCallerId(radio, cardEl, idStr,timestamp = null) {
     // this object lives for the lifetime of the element
     if (!cardEl._cidState){
         cardEl._cidState = {
@@ -634,8 +641,15 @@ function updateCallerId(cardEl, idStr){
     /* ── radio just went idle – append the *previous* ID ────────────── */
     } else if (st.active){          // we *were* RXing and just stopped
         st.active = false;
-
-        const timeStr =
+        var timeStr = "";
+        
+        if (timestamp){
+            
+            const date = new Date(timestamp * 1000);
+            timeStr = date.toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit', hour12: false});
+            // console.log ("Timestamp: " + timeStr);
+        }else{
+        timeStr =
         (config?.ClockFormat === "UTC")
             ? getTimeUTC("HH:mm:ss")   
             : getTimeLocal("HH:mm:ss");
@@ -739,7 +753,7 @@ function populateRadios() {
         // Add the radio card
         addRadioCard(index, "radio" + String(index), radio.name, radio.color);
         // Update edit list
-        addRadioToEditTable(radio);
+        addRadioToEditTable(radio, index);
         // Populate its text
         updateRadioCard(index);
     });
@@ -780,7 +794,7 @@ function addRadioCard(idx, id, name, color) {
         // Select the radio
         selectRadio(id);
     });
-
+    
     // Bind the minimize button
     $(".minimize-radio-card").click(function (event) {
 
@@ -796,6 +810,13 @@ function addRadioCard(idx, id, name, color) {
     // Store the audio bars as discrete elements, so we can update them in the animation callback without querying for them every time
     radios[idx].elements.rxbar = radios[idx].elements.card.querySelector("#rx-bar");
     radios[idx].elements.txbar = radios[idx].elements.card.querySelector("#tx-bar");
+}
+
+
+/* quick helper – wipe rows & repopulate the table */
+function rebuildEditTable (){
+   $('#edit-radios-table tr:gt(0)').remove();       // keep header
+   radios.forEach((r,i)=>addRadioToEditTable(r,i));
 }
 
 /**
@@ -884,6 +905,7 @@ function editRadio(editRow, name)
  * @param {str} name name of the radio
  */
 function deleteRadio(editRow, name) {
+    
     // Find the radio
     const idx = radios.findIndex((radio) => radio.name == name);
     // Verify found
@@ -904,6 +926,7 @@ function deleteRadio(editRow, name) {
     $(editRow).closest("tr").remove();
     // Save config
     saveConfig();
+    refreshLayoutView();
 }
 
 /**
@@ -1065,7 +1088,8 @@ function updateRadioCard(idx) {
     }
     // Update caller ID
     if (radio.status.CallerId != null) {
-        updateCallerId(radioCard[0], radio.status.CallerId);
+
+        updateCallerId(radio, radioCard[0], radio.status.CallerId);
     }
     
     // Remove all current classes
@@ -1099,6 +1123,9 @@ function updateRadioCard(idx) {
                 radioCard.addClass("encrypted");
                 checkAudioMeterCallback();
             }, radios[idx].rtc.rxLatency);
+            break;
+        case "Connecting":
+            radioCard.addClass("connecting");
             break;
         case "Disconnected":
             radioCard.addClass("disconnected");
@@ -1158,10 +1185,14 @@ function updateRadioControls() {
         if (radio.status.State == "Disconnected") { return }
         // Enable softkeys
         $("#radio-controls .btn").removeClass("disabled");
-        // Get softkey text based on page index
+        if (radio.status.Softkeys == null) {
+            console.warn("No softkeys available");
+            return;
+        }
         var curSoftkeyPage = radio.status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage));
         console.debug("Got current softkey page");
         console.debug(curSoftkeyPage);
+
         // Update softkeys on page
         curSoftkeyPage.forEach(function(softkey, index) {
             // Get text
@@ -1259,14 +1290,17 @@ function startPtt(micActive) {
  * Stop radio PTT
  */
 function stopPtt() {
+   
     if (pttActive) {
         console.log("PTT released");
         pttActive = false;
+        if (radios[selectedRadioIdx] == null) { return;}
         // Mute mic
         setTimeout( muteMic, audio.micMuteDelay );
         // Play sound
         //playSound("sound-ptt-end");
         // Send the stop command if connected
+        
         if (radios[selectedRadioIdx].wsConn && selectedRadio) {
             // Wait and then stop TX (handles mic latency)
             setTimeout( function() {
@@ -1315,6 +1349,9 @@ function changeChannel(down) {
  * @param {int} idx softkey index
  */
 function pressSoftkey(idx) {
+    if(radios[selectedRadioIdx] == null) {
+        return;
+    }
     // convert the current softkey index to the softkey in the radio
     var pressedKey = radios[selectedRadioIdx].status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage))[idx-1];
     console.debug("Mapped pressed softkey to softkey:" + pressedKey.Name);
@@ -1326,6 +1363,8 @@ function pressSoftkey(idx) {
  * @param {int} idx softkey index
  */
 function releaseSoftkey(idx) {
+    if(radios[selectedRadioIdx] == null) {return;}
+
     var releasedKey = radios[selectedRadioIdx].status.Softkeys.slice(6*softkeyPage, 6+(6*softkeyPage))[idx-1];
     console.debug("Mapped pressed softkey to softkey:" + releasedKey.Name);
     releaseButton(releasedKey.Name);
@@ -1338,6 +1377,9 @@ function button_left() {
     if (config.Audio.ButtonSounds) {
         playSound("sound-click");
     }
+    // Check if we have a selected radio
+    if (radios[selectedRadioIdx] == null) { return;}
+
     maxPages = Math.ceil(radios[selectedRadioIdx].status.Softkeys.length / 6) - 1;
     if (softkeyPage == 0)
     {
@@ -1358,6 +1400,9 @@ function button_right() {
     if (config.Audio.ButtonSounds) {
         playSound("sound-click");
     }
+    // Check if we have a selected radio
+    if (radios[selectedRadioIdx] == null) { return;}
+
     maxPages = Math.ceil(radios[selectedRadioIdx].status.Softkeys.length / 6) - 1;
     if (softkeyPage == maxPages)
     {
@@ -1441,6 +1486,7 @@ function muteButton(event, obj) {
     const radioId = $(obj).closest(".radio-card").attr('id');
     // Get index of radio in list
     const idx = getRadioIndex(radioId);
+
     // toggle mute
     toggleMute(idx);
     // stop prop
@@ -1620,9 +1666,32 @@ function toggleMainMenu() {
  * @param {string} id element ID of the popup to show
  */
 function showConfigPopup(id) {
-    console.debug(`Showing popup ${id}`);
+    console.log(`Showing popup ${id}`);
     $("#body-dimmer").show();
     $(id).show();
+    
+    
+
+    if(id == "#add-radio-popup") {
+        //populate the layout new-radio-layout
+        $("#new-radio-layout").empty();
+        const sel = $('#new-radio-layout').empty();
+        config.Layouts.forEach(l=>sel.append(`<option>${l.name}</option>`));
+
+        // radios.forEach((radio, index) => {
+        //     // Add the radio card
+        //     const sel  = document.getElementById('new-radio-layout');
+        //     sel.innerHTML = '';             // wipe old <option>s
+        //     Object.values(config.Layouts).forEach((layout) => {
+        //         const opt = document.createElement('option');
+        //         opt.value = layout.name;
+        //         opt.textContent = layout.name;
+        //         sel.appendChild(opt);
+        //     });
+            
+        // });
+
+    }
 }
 
 /**
@@ -1853,6 +1922,12 @@ async function readConfig() {
     // Populate radio cards
     populateRadios();
 
+    // Update the call log format
+    setupCallerLog(radios);
+
+    //Build layout tabs
+    buildLayoutTabs();
+
     // If autoconnect is specified, autoconnect!
     if (config.Autoconnect) {
         connectAllButton();
@@ -1905,6 +1980,105 @@ async function saveConfig() {
 
    
 
+}
+
+let currentLayout = null;          // name of the active tab
+
+function buildLayoutTabs (){
+    const bar = document.getElementById('layout-tabs');
+    bar.innerHTML = '';                                       // wipe
+
+    config.Layouts.forEach((lay,idx)=>{
+        const btn   = document.createElement('button');
+        btn.textContent   = lay.name;
+        btn.dataset.name  = lay.name;
+        btn.onclick       = ()=>showLayout(lay.name);
+        if (idx===0) btn.classList.add('active');             // default tab
+        bar.appendChild(btn);
+    });
+
+    currentLayout = config.Layouts[0].name;                   // fire once
+    refreshLayoutView();
+}
+
+function refreshLayoutView (){
+    radios.forEach((r,i)=>{
+        const card = document.getElementById(`radio${i}`);
+        if (!card) return;
+
+        const show = currentLayout==='All' || r.layout===currentLayout;
+        card.style.display = show ? '' : 'none';
+    });
+}
+
+function showLayout (name) {
+    currentLayout = name;
+
+    /* highlight active tab */
+    document.querySelectorAll('#layout-tabs button')
+            .forEach(b => b.classList.toggle('active',
+                              b.dataset.name === name));
+
+    /* show / hide cards */
+    radios.forEach((r, idx) => {
+        const card = document.getElementById(`radio${idx}`);
+        if (!card) return;                       // safety
+
+        const belongs = (name === 'All') || (r.layout === name);
+        card.style.display = belongs ? '' : 'none';
+    });
+}
+
+function loadLayoutsTable () {
+    const tbl = document.getElementById('layouts-table');
+    tbl.querySelectorAll('tr:not(:first-child)').forEach(tr => tr.remove());
+
+    config.Layouts.forEach(lay => {
+        /* work out how many cards point at this layout */
+        const cardCount = (lay.name === 'All')
+            ? radios.length                               // special tab
+            : radios.filter(r => r.layout === lay.name).length;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>${lay.name}</td>
+          <td>${cardCount}</td>
+          <td>
+             ${lay.name === 'All' ? '' :
+              `<a href="#" onclick="deleteLayout('${lay.name}')">
+                  <ion-icon name="trash-sharp"></ion-icon>
+               </a>`}
+          </td>`;
+        tbl.appendChild(tr);
+    });
+}
+
+function addLayout () {
+    const name = document.getElementById('new-layout-name').value.trim();
+    if (!name) { alert('Enter a name'); return; }
+    if (config.Layouts.some(l => l.name === name)) {
+        alert('Layout already exists'); return;
+    }
+
+    config.Layouts.push({ name });
+    document.getElementById('new-layout-name').value = '';
+
+    saveConfig();
+    buildLayoutTabs();
+    loadLayoutsTable();
+}
+
+function deleteLayout (name) {
+    if (!confirm(`Delete layout "${name}" ?`)) return;
+
+    config.Layouts = config.Layouts.filter(l => l.name !== name);
+
+    radios.forEach(r => { if (r.layout === name) r.layout = 'All'; });
+
+    saveConfig();
+    buildLayoutTabs();
+    loadLayoutsTable();
+    showLayout(currentLayout === name ? 'All' : currentLayout);
 }
 
 function newRadioClear() {
@@ -2232,12 +2406,13 @@ function handleRtcWsMsg(event, idx)
 function handleRtcWsError(event, idx)
 {
     console.error(`Radio ${idx} WebRTC WS got error!`);
-    console.error(event.data);
+    if(event.data) {
+        console.error(event.data);
+    }
 }
 
 function handleRtcWsClose(event, idx)
 {
-    console.warn(`Radio ${idx} WebRTC websocket closed!`);
     disconnectRadio(idx);
 }
 
@@ -2611,6 +2786,8 @@ function audioMeterCallback() {
 
 function checkAudioMeterCallback()
 {
+    if (document.getElementById(`radio${idx}`).style.display === 'none')
+    return;
     // Get the overall "audio doing something" status (we check classes instead of actual statuses to account for the latency delays)
     console.debug("Checking if any radio's audio is active");
     audio_active = false;
@@ -2757,6 +2934,9 @@ function bonk() {
  */
 function muteRadio(idx, mute) {
     if (mute) {
+        if (radios[idx].audioSrc == null) {
+            return;
+        }
         console.info(`Muting radio ${idx}`);
         // Set audio node
         radios[idx].audioSrc.muteNode.gain.setValueAtTime(0, audio.context.currentTime);
@@ -2766,6 +2946,9 @@ function muteRadio(idx, mute) {
         // Set state
         radios[idx].mute = true;
     } else {
+        if (radios[idx].audioSrc == null) {
+            return;
+        }
         console.info(`Unmuting radio ${idx}`);
         // Set audio node
         radios[idx].audioSrc.muteNode.gain.setValueAtTime(1, audio.context.currentTime);
@@ -3388,6 +3571,7 @@ function handleSocketClose(event, idx) {
     radios[idx].wsConn = null;
     radios[idx].status.State = 'Disconnected';
 
+
     // UI Update
     $(`#radio${idx} .icon-connect`).removeClass('connected');
     $(`#radio${idx} .icon-connect`).removeClass('connecting');
@@ -3431,6 +3615,10 @@ function restartRadio(event, obj) {
     }
     // Send reset command to radio
     console.info("Sending reset command");
+    if(radios[idx].wsConn == null) {
+        console.warn("Radio websocket not connected, can't reset");
+        return;
+    }
     radios[idx].wsConn.send(JSON.stringify(
         {
             "radio": {
